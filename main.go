@@ -716,6 +716,274 @@ func printEvidenceSummary(pkg EvidencePackage) {
 	}
 }
 
+// ── Feature 7: Deterministic Diagnosis Engine ───────────────────────────────
+//
+// The deterministic diagnosis engine analyzes the EvidencePackage (Feature 5)
+// and identifies known Kubernetes failure conditions using explicit rules.
+//
+// Key Principles:
+//   - Zero AI / LLM / probabilistic confidence scores used.
+//   - Rules must NEVER guess. If evidence is insufficient, returns UNKNOWN.
+//   - Every CONFIRMED diagnosis includes the exact EvidenceItem IDs supporting it.
+//   - Distinguishes symptoms (e.g. CrashLoopBackOff) from root causes (e.g. OOMKilled).
+
+type DiagnosisStatus string
+
+const (
+	DiagnosisConfirmed DiagnosisStatus = "CONFIRMED"
+	DiagnosisUnknown   DiagnosisStatus = "UNKNOWN"
+)
+
+type DiagnosisCode string
+
+const (
+	CodeImagePullFailure    DiagnosisCode = "IMAGE_PULL_FAILURE"
+	CodeOOMKilled           DiagnosisCode = "OOM_KILLED"
+	CodeNodeNotReady        DiagnosisCode = "NODE_NOT_READY"
+	CodeInsufficientMemory  DiagnosisCode = "INSUFFICIENT_MEMORY"
+	CodeInsufficientCPU     DiagnosisCode = "INSUFFICIENT_CPU"
+	CodeInsufficientGPU     DiagnosisCode = "INSUFFICIENT_GPU"
+	CodeDBAuthFailure       DiagnosisCode = "DB_AUTH_FAILURE"
+	CodeDBConnectionFailure DiagnosisCode = "DB_CONNECTION_FAILURE"
+	CodeUnknown             DiagnosisCode = "UNKNOWN"
+)
+
+type PodDiagnosis struct {
+	PodName       string          `json:"pod_name"`
+	Namespace     string          `json:"namespace"`
+	Status        DiagnosisStatus `json:"status"`
+	DiagnosisCode DiagnosisCode   `json:"diagnosis_code"`
+	Summary       string          `json:"summary"`
+	Explanation   string          `json:"explanation"`
+	EvidenceIDs   []string        `json:"evidence_ids"`
+}
+
+type DiagnosisReport struct {
+	Cluster     string         `json:"cluster"`
+	Namespace   string         `json:"namespace"`
+	DiagnosedAt string         `json:"diagnosed_at"`
+	Results     []PodDiagnosis `json:"results"`
+}
+
+// dedupeStrings removes duplicate strings from a slice preserving order.
+func dedupeStrings(slice []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(slice))
+	for _, s := range slice {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// asPodStatusData attempts to extract PodStatusData from EvidenceItem.Data.
+func asPodStatusData(data any) (PodStatusData, bool) {
+	if ps, ok := data.(PodStatusData); ok {
+		return ps, true
+	}
+	if m, ok := data.(map[string]any); ok {
+		b, err := json.Marshal(m)
+		if err != nil {
+			return PodStatusData{}, false
+		}
+		var ps PodStatusData
+		if err := json.Unmarshal(b, &ps); err == nil && ps.PodName != "" {
+			return ps, true
+		}
+	}
+	return PodStatusData{}, false
+}
+
+// asKubernetesEventData attempts to extract KubernetesEventData from EvidenceItem.Data.
+func asKubernetesEventData(data any) (KubernetesEventData, bool) {
+	if ev, ok := data.(KubernetesEventData); ok {
+		return ev, true
+	}
+	if m, ok := data.(map[string]any); ok {
+		b, err := json.Marshal(m)
+		if err != nil {
+			return KubernetesEventData{}, false
+		}
+		var ev KubernetesEventData
+		if err := json.Unmarshal(b, &ev); err == nil && ev.Reason != "" {
+			return ev, true
+		}
+	}
+	return KubernetesEventData{}, false
+}
+
+// diagnosePod evaluates deterministic rules against a single pod's evidence.
+//
+// Rule Precedence Logic:
+//  1. OOM_KILLED: Causal evidence (last termination state OOMKilled or OOMKilled event).
+//     Takes precedence over generic CrashLoopBackOff/BackOff states.
+//  2. IMAGE_PULL_FAILURE: Container state ErrImagePull/ImagePullBackOff or image pull events.
+//  3. NODE_NOT_READY: Explicit NodeNotReady event evidence.
+//  4. Default: UNKNOWN (insufficient evidence or symptom-only states like CrashLoopBackOff/Pending).
+func diagnosePod(podPkg PodEvidencePackage) PodDiagnosis {
+	// ── Rule 1: OOM_KILLED ───────────────────────────────────────────────────
+	var oomEvIDs []string
+	for _, ev := range podPkg.Evidence {
+		if ev.Source == SourcePodStatus {
+			if ps, ok := asPodStatusData(ev.Data); ok {
+				for _, c := range ps.Containers {
+					if c.HasLastTermination && strings.EqualFold(c.LastTermReason, "OOMKilled") {
+						oomEvIDs = append(oomEvIDs, ev.ID)
+						break
+					}
+					if strings.Contains(c.State, "OOMKilled") {
+						oomEvIDs = append(oomEvIDs, ev.ID)
+						break
+					}
+				}
+			}
+		} else if ev.Source == SourceKubernetesEvent {
+			if ke, ok := asKubernetesEventData(ev.Data); ok {
+				if strings.EqualFold(ke.Reason, "OOMKilled") ||
+					strings.Contains(ke.Message, "OOMKilled") ||
+					strings.Contains(ke.Message, "Out of memory: Kill process") {
+					oomEvIDs = append(oomEvIDs, ev.ID)
+				}
+			}
+		}
+	}
+	if len(oomEvIDs) > 0 {
+		return PodDiagnosis{
+			PodName:       podPkg.PodName,
+			Namespace:     podPkg.Namespace,
+			Status:        DiagnosisConfirmed,
+			DiagnosisCode: CodeOOMKilled,
+			Summary:       "Container process killed due to memory limit exhaustion (OOMKilled).",
+			Explanation:   "Kubernetes or kernel OOM killer terminated the container process because it exceeded its allocated memory limit.",
+			EvidenceIDs:   dedupeStrings(oomEvIDs),
+		}
+	}
+
+	// ── Rule 2: IMAGE_PULL_FAILURE ──────────────────────────────────────────
+	var imgEvIDs []string
+	for _, ev := range podPkg.Evidence {
+		if ev.Source == SourcePodStatus {
+			if ps, ok := asPodStatusData(ev.Data); ok {
+				for _, c := range ps.Containers {
+					if strings.Contains(c.State, "ErrImagePull") || strings.Contains(c.State, "ImagePullBackOff") {
+						imgEvIDs = append(imgEvIDs, ev.ID)
+						break
+					}
+				}
+			}
+		} else if ev.Source == SourceKubernetesEvent {
+			if ke, ok := asKubernetesEventData(ev.Data); ok {
+				reason := ke.Reason
+				msg := ke.Message
+				if reason == "ErrImagePull" || reason == "ImagePullBackOff" ||
+					(reason == "Failed" && (strings.Contains(msg, "Failed to pull image") || strings.Contains(msg, "pull access denied") || strings.Contains(msg, "Back-off pulling image"))) {
+					imgEvIDs = append(imgEvIDs, ev.ID)
+				}
+			}
+		}
+	}
+	if len(imgEvIDs) > 0 {
+		return PodDiagnosis{
+			PodName:       podPkg.PodName,
+			Namespace:     podPkg.Namespace,
+			Status:        DiagnosisConfirmed,
+			DiagnosisCode: CodeImagePullFailure,
+			Summary:       "Container image could not be pulled from registry.",
+			Explanation:   "Kubernetes reports that the container image could not be pulled and the container is in a waiting state with ErrImagePull / ImagePullBackOff.",
+			EvidenceIDs:   dedupeStrings(imgEvIDs),
+		}
+	}
+
+	// ── Rule 3: NODE_NOT_READY ───────────────────────────────────────────────
+	var nodeEvIDs []string
+	for _, ev := range podPkg.Evidence {
+		if ev.Source == SourceKubernetesEvent {
+			if ke, ok := asKubernetesEventData(ev.Data); ok {
+				if ke.Reason == "NodeNotReady" || strings.Contains(ke.Message, "NodeNotReady") {
+					nodeEvIDs = append(nodeEvIDs, ev.ID)
+				}
+			}
+		}
+	}
+	if len(nodeEvIDs) > 0 {
+		return PodDiagnosis{
+			PodName:       podPkg.PodName,
+			Namespace:     podPkg.Namespace,
+			Status:        DiagnosisConfirmed,
+			DiagnosisCode: CodeNodeNotReady,
+			Summary:       "Target node is in NotReady condition.",
+			Explanation:   "Kubernetes event indicates that the node hosting or assigned to the pod is not ready.",
+			EvidenceIDs:   dedupeStrings(nodeEvIDs),
+		}
+	}
+
+	// ── Default: UNKNOWN ─────────────────────────────────────────────────────
+	return PodDiagnosis{
+		PodName:       podPkg.PodName,
+		Namespace:     podPkg.Namespace,
+		Status:        DiagnosisUnknown,
+		DiagnosisCode: CodeUnknown,
+		Summary:       "Available evidence is insufficient to establish a supported root cause.",
+		Explanation:   "The available evidence (pod status, events, container logs) does not establish a supported root cause.",
+		EvidenceIDs:   []string{},
+	}
+}
+
+// diagnoseEvidence evaluates deterministic rules against all pods in the EvidencePackage.
+func diagnoseEvidence(pkg EvidencePackage) DiagnosisReport {
+	now := time.Now().UTC().Format(time.RFC3339)
+	report := DiagnosisReport{
+		Cluster:     pkg.Cluster,
+		Namespace:   pkg.Namespace,
+		DiagnosedAt: now,
+		Results:     make([]PodDiagnosis, 0, len(pkg.Pods)),
+	}
+
+	for _, podPkg := range pkg.Pods {
+		diag := diagnosePod(podPkg)
+		report.Results = append(report.Results, diag)
+	}
+
+	return report
+}
+
+// printDiagnosisSummary prints human-readable diagnosis output to CLI.
+func printDiagnosisSummary(report DiagnosisReport) {
+	fmt.Println()
+	fmt.Println("══════════════════════════════════════════════════════════════")
+	fmt.Println("  Deterministic Diagnosis — Feature 7")
+	fmt.Println("══════════════════════════════════════════════════════════════")
+	fmt.Printf("  Cluster      : %s\n", report.Cluster)
+	fmt.Printf("  Namespace    : %s\n", report.Namespace)
+	fmt.Printf("  Diagnosed At : %s\n", report.DiagnosedAt)
+	fmt.Printf("  Pods Analyzed: %d\n", len(report.Results))
+	fmt.Println()
+
+	for _, res := range report.Results {
+		fmt.Printf("  Pod: %s\n", res.PodName)
+		fmt.Printf("    Status        : %s\n", res.Status)
+		fmt.Printf("    Diagnosis Code: %s\n", res.DiagnosisCode)
+		fmt.Printf("    Summary       : %s\n", res.Summary)
+		fmt.Printf("    Explanation   : %s\n", res.Explanation)
+		if len(res.EvidenceIDs) > 0 {
+			fmt.Printf("    Evidence IDs  : %s\n", strings.Join(res.EvidenceIDs, ", "))
+		} else {
+			fmt.Printf("    Evidence IDs  : none (insufficient evidence for root cause)\n")
+		}
+		fmt.Println()
+	}
+
+	fmt.Println("── Diagnosis Report JSON ──────────────────────────────────────")
+	jsonBytes, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: failed to serialize diagnosis report: %v\n", err)
+		return
+	}
+	fmt.Println(string(jsonBytes))
+}
+
 // ── Entry Point ───────────────────────────────────────────────────────────────
 
 func main() {
@@ -730,4 +998,9 @@ func main() {
 	// Feature 5: build and print unified evidence package
 	pkg := buildEvidencePackage(clientset, config.Host, "default")
 	printEvidenceSummary(pkg)
+
+	// Feature 7: deterministic diagnosis engine
+	diagReport := diagnoseEvidence(pkg)
+	printDiagnosisSummary(diagReport)
 }
+

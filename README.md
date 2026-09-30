@@ -447,3 +447,86 @@ kubectl delete pod test-image-failure -n default
 ```
 
 Confirmed removed. Only `test-nginx` and `test-logger` remain.
+
+---
+
+## Feature 7 — Deterministic Diagnosis Engine
+
+> **Feature 7 does not use AI. It provides a deterministic baseline against which the future Needle 3 diagnostic system can be evaluated.**
+
+### Purpose & Why Deterministic Rules are Needed Before AI
+
+Before introducing AI models or Needle 3, a reliable diagnostic pipeline requires a trusted, deterministic baseline. AI diagnosis can generate hallucinations or probabilistic guesses if unsupported by facts.
+
+The deterministic diagnosis engine evaluates explicit rules against the real **Evidence Package** (Feature 5). It operates under strict rules:
+- **Zero AI / LLM / probabilistic scoring used.**
+- **Never guess.** If evidence is insufficient to establish a supported root cause, return `UNKNOWN`.
+- **Traceable trust:** Every `CONFIRMED` diagnosis cites the exact `EvidenceItem` IDs supporting it.
+
+### Supported Diagnosis Codes
+
+| Code | Description | Implementation Status |
+|------|-------------|-----------------------|
+| `IMAGE_PULL_FAILURE` | Container image could not be pulled | Supported (Rule 2) |
+| `OOM_KILLED` | Container killed due to memory limit | Supported (Rule 1) |
+| `NODE_NOT_READY` | Node condition indicates NotReady | Supported (Rule 3) |
+| `INSUFFICIENT_MEMORY` | Scheduling failure due to memory | Reserved constant |
+| `INSUFFICIENT_CPU` | Scheduling failure due to CPU | Reserved constant |
+| `INSUFFICIENT_GPU` | Scheduling failure due to GPU | Reserved constant |
+| `DB_AUTH_FAILURE` | Database authentication failure | Reserved constant |
+| `DB_CONNECTION_FAILURE` | Database network connection failure | Reserved constant |
+| `UNKNOWN` | Insufficient evidence for root cause | Default state |
+
+### Rule Conditions & Precedence
+
+Rules are evaluated in strict order of causal strength:
+
+1. **Rule 1: `OOM_KILLED` (Priority 1)**
+   - **Condition:** Pod container `LastTermReason == "OOMKilled"` OR container state contains `"OOMKilled"` OR Kubernetes event reason/message contains `"OOMKilled"` / `"Out of memory: Kill process"`.
+   - **Result:** `status = CONFIRMED`, `diagnosis_code = OOM_KILLED`.
+   - **Cites:** Exact matching `pod_status` and `kubernetes_event` Evidence IDs.
+
+2. **Rule 2: `IMAGE_PULL_FAILURE` (Priority 2)**
+   - **Condition:** Pod container state contains `"ErrImagePull"` or `"ImagePullBackOff"` OR Kubernetes event reason is `"ErrImagePull"`/`"ImagePullBackOff"` or event message contains `"Failed to pull image"` / `"pull access denied"`.
+   - **Result:** `status = CONFIRMED`, `diagnosis_code = IMAGE_PULL_FAILURE`.
+   - **Cites:** Exact matching `pod_status` and `kubernetes_event` Evidence IDs.
+
+3. **Rule 3: `NODE_NOT_READY` (Priority 3)**
+   - **Condition:** Kubernetes event reason is `"NodeNotReady"` or event message contains `"NodeNotReady"`.
+   - **Result:** `status = CONFIRMED`, `diagnosis_code = NODE_NOT_READY`.
+   - **Cites:** Matching `kubernetes_event` Evidence IDs.
+
+4. **Rule 4: `UNKNOWN` (Priority 4 - Default)**
+   - **Condition:** No explicit root-cause rule matched.
+   - **Result:** `status = UNKNOWN`, `diagnosis_code = UNKNOWN`.
+   - **Cites:** None (`evidence_ids = []`).
+
+### Symptom vs. Root Cause Distinction
+
+- **`CrashLoopBackOff` is a symptom/state**, not a root cause. If a pod enters `CrashLoopBackOff` because of an `OOMKilled` container termination, Rule 1 evaluates first and identifies `OOM_KILLED` as the root cause. If a pod enters `CrashLoopBackOff` without explicit root-cause evidence, the engine returns `UNKNOWN`.
+- **`Pending` is a state**, not a root cause. A pending pod returns `UNKNOWN` unless explicit evidence (e.g. image pull error or node error) proves the cause.
+
+### Controlled Test Workloads & Results
+
+Controlled failures were executed on the local cluster to test all diagnosis outcomes:
+
+| Test Workload | Container Image / Limit | Observed Outcome | Status | Diagnosis Code | Evidence IDs |
+|---------------|------------------------|------------------|--------|----------------|--------------|
+| `test-image-failure` | `stack8s-demo/nonexistent-image:does-not-exist` | `ImagePullBackOff` | `CONFIRMED` | `IMAGE_PULL_FAILURE` | `E1, E5, E12` |
+| `test-oom-failure` | `alpine:latest` (limit: `10Mi`) | `OOMKilled (exit: 137)` | `CONFIRMED` | `OOM_KILLED` | `E19` |
+| `test-logger` | `busybox:1.36` | `Completed (exit: 0)` | `UNKNOWN` | `UNKNOWN` | `none` |
+| `test-nginx` | `nginx:1.27-alpine` | `Running` | `UNKNOWN` | `UNKNOWN` | `none` |
+
+### Unit Test Coverage
+
+Automated Go unit tests (`main_test.go`) verify rule execution:
+- `TestDiagnosePod_ImagePullBackOff`: PASS
+- `TestDiagnosePod_ErrImagePull`: PASS
+- `TestDiagnosePod_OOMKilled`: PASS
+- `TestDiagnosePod_CrashLoopBackOff_NoRootCause`: PASS (`UNKNOWN`)
+- `TestDiagnosePod_Pending_NoCause`: PASS (`UNKNOWN`)
+- `TestDiagnosePod_NormalRunningPod`: PASS (`UNKNOWN`)
+- `TestDiagnosePod_Precedence_OOMOverBackoff`: PASS (`OOM_KILLED` precedence)
+
+All test workloads were cleaned up after verification.
+
