@@ -1,0 +1,9 @@
+# Compiled binary
+k8s-check
+
+# Go build cache
+*.test
+*.out
+
+# macOS
+.DS_Store
