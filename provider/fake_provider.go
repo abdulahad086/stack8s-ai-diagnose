@@ -1,0 +1,59 @@
+package provider
+
+import (
+	"context"
+)
+
+// FakeProvider is an in-memory InfrastructureProvider used for unit testing
+// evidence collection, data mapping, and diagnosis boundaries without a live cluster.
+type FakeProvider struct {
+	ClusterName string
+	NodesData   []NodeInfo
+	PodsData    map[string][]PodInfo // namespace -> []PodInfo
+	EventsData  map[string][]EventInfo // podName -> []EventInfo
+	LogsData    map[string]ContainerLogInfo // podName/container -> ContainerLogInfo
+}
+
+func NewFakeProvider() *FakeProvider {
+	return &FakeProvider{
+		ClusterName: "https://fake.cluster.local:6443",
+		PodsData:    make(map[string][]PodInfo),
+		EventsData:  make(map[string][]EventInfo),
+		LogsData:    make(map[string]ContainerLogInfo),
+	}
+}
+
+func (f *FakeProvider) Name() string {
+	return "fake-provider"
+}
+
+func (f *FakeProvider) ClusterHost() string {
+	return f.ClusterName
+}
+
+func (f *FakeProvider) GetNodes(ctx context.Context) ([]NodeInfo, error) {
+	return f.NodesData, nil
+}
+
+func (f *FakeProvider) GetPods(ctx context.Context, namespace string) ([]PodInfo, error) {
+	return f.PodsData[namespace], nil
+}
+
+func (f *FakeProvider) GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error) {
+	return f.EventsData[podName], nil
+}
+
+func (f *FakeProvider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, tailLines int64) (ContainerLogInfo, error) {
+	key := podName + "/" + containerName
+	if logInfo, ok := f.LogsData[key]; ok {
+		return logInfo, nil
+	}
+	return ContainerLogInfo{
+		PodName:           podName,
+		Namespace:         namespace,
+		ContainerName:     containerName,
+		LineLimit:         tailLines,
+		Unavailable:       true,
+		UnavailableReason: "no fake logs available",
+	}, nil
+}

@@ -616,4 +616,34 @@ Integrated into Go test suite (`dataset_test.go` and `dataset_builder.go`):
 - UNKNOWN Diagnostic Cases: 6
 - Validation & Leakage Check: PASSED ✅
 
+---
+
+## Feature 9 — Provider-Based Diagnostic Architecture
+
+> **Feature 9 implements architectural separation of concerns. It decouples the core diagnostic engine from specific infrastructure client libraries.**
+
+### Purpose & Architecture
+
+Feature 9 introduces a provider-based abstraction (`provider.InfrastructureProvider`) that isolates infrastructure queries from diagnostic logic:
+
+```
+              Diagnostic Engine
+                     │
+                     ▼
+           InfrastructureProvider
+                /           \
+               /             \
+  LocalKubernetesProvider   Stack8sProvider
+          NOW                  FUTURE
+```
+
+### Key Changes
+- **Client-Go Isolation:** `k8s.io/client-go` dependency is 100% encapsulated inside `provider/local_k8s.go`.
+- **Domain Types:** Queries return clean domain structs (`NodeInfo`, `PodInfo`, `ContainerInfo`, `EventInfo`, `ContainerLogInfo`).
+- **Provider Factory:** Configuration via `STACK8S_PROVIDER` environment variable (`local-kubernetes` default, `stack8s` placeholder).
+- **Provider-Agnostic Boundaries:** `buildEvidencePackage`, `diagnoseEvidence`, and dataset tooling operate on domain models and `EvidencePackage` only.
+- **Future Integration Contract:** Documented placeholder in `provider/stack8s_provider.go` ready for future Stack8s infrastructure backend integration without altering diagnostic engine code.
+- **Architecture Specification:** Detailed specification documented in [`ARCHITECTURE.md`](file:///Users/mac/Desktop/ai-stack8s/stack8s-ai-diagnose/ARCHITECTURE.md).
+
+
 

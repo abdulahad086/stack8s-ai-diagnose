@@ -1,0 +1,302 @@
+package provider
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+)
+
+// LocalKubernetesProvider implements InfrastructureProvider using k8s.io/client-go.
+// All client-go types (corev1, metav1, rest.Config) are strictly isolated inside this struct/file.
+type LocalKubernetesProvider struct {
+	config    *rest.Config
+	clientset *kubernetes.Clientset
+}
+
+// NewLocalKubernetesProvider initializes a REST config and typed clientset
+// respecting $KUBECONFIG or falling back to ~/.kube/config.
+func NewLocalKubernetesProvider() (*LocalKubernetesProvider, error) {
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, &ProviderError{
+				Code:    ErrCodeUnavailable,
+				Message: "cannot determine home directory for kubeconfig",
+				Err:     err,
+			}
+		}
+		kubeconfig = filepath.Join(home, ".kube", "config")
+	}
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeUnavailable,
+			Message: fmt.Sprintf("failed to load kubeconfig from %s", kubeconfig),
+			Err:     err,
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeUnavailable,
+			Message: "failed to create Kubernetes client",
+			Err:     err,
+		}
+	}
+
+	return &LocalKubernetesProvider{
+		config:    config,
+		clientset: clientset,
+	}, nil
+}
+
+func (p *LocalKubernetesProvider) Name() string {
+	return "local-kubernetes"
+}
+
+func (p *LocalKubernetesProvider) ClusterHost() string {
+	if p.config != nil {
+		return p.config.Host
+	}
+	return "unknown-cluster"
+}
+
+// GetNodes retrieves node list and maps to domain NodeInfo.
+func (p *LocalKubernetesProvider) GetNodes(ctx context.Context) ([]NodeInfo, error) {
+	nodes, err := p.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeCollectionFailed,
+			Message: "failed to list nodes",
+			Err:     err,
+		}
+	}
+
+	result := make([]NodeInfo, 0, len(nodes.Items))
+	for _, node := range nodes.Items {
+		status := "Unknown"
+		for _, cond := range node.Status.Conditions {
+			if cond.Type == "Ready" {
+				if cond.Status == "True" {
+					status = "Ready"
+				} else {
+					status = "NotReady"
+				}
+				break
+			}
+		}
+		result = append(result, NodeInfo{
+			Name:   node.Name,
+			Status: status,
+		})
+	}
+	return result, nil
+}
+
+// containerStateString formats a corev1.ContainerState into a domain string.
+func containerStateString(state corev1.ContainerState) string {
+	switch {
+	case state.Running != nil:
+		return fmt.Sprintf("Running (started: %s)", state.Running.StartedAt.Format("2006-01-02 15:04:05"))
+	case state.Waiting != nil:
+		reason := state.Waiting.Reason
+		if reason == "" {
+			reason = "Unknown"
+		}
+		msg := state.Waiting.Message
+		if msg != "" {
+			return fmt.Sprintf("Waiting (%s: %s)", reason, msg)
+		}
+		return fmt.Sprintf("Waiting (%s)", reason)
+	case state.Terminated != nil:
+		return fmt.Sprintf("Terminated (reason: %s, exit: %d)",
+			state.Terminated.Reason, state.Terminated.ExitCode)
+	default:
+		return "Unknown"
+	}
+}
+
+// GetPods lists all pods in the namespace and maps them to domain PodInfo.
+func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string) ([]PodInfo, error) {
+	pods, err := p.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeCollectionFailed,
+			Message: fmt.Sprintf("failed to list pods in namespace %q", namespace),
+			Err:     err,
+		}
+	}
+
+	result := make([]PodInfo, 0, len(pods.Items))
+	for _, pod := range pods.Items {
+		nodeName := pod.Spec.NodeName
+		if nodeName == "" {
+			nodeName = "<not yet scheduled>"
+		}
+
+		statusMap := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses))
+		for _, cs := range pod.Status.ContainerStatuses {
+			statusMap[cs.Name] = cs
+		}
+
+		containers := make([]ContainerInfo, 0, len(pod.Spec.Containers))
+		for _, c := range pod.Spec.Containers {
+			ci := ContainerInfo{
+				Name:  c.Name,
+				Image: c.Image,
+			}
+			if cs, ok := statusMap[c.Name]; ok {
+				ci.Ready = cs.Ready
+				ci.RestartCount = cs.RestartCount
+				ci.State = containerStateString(cs.State)
+				if cs.LastTerminationState.Terminated != nil {
+					lt := cs.LastTerminationState.Terminated
+					reason := lt.Reason
+					if reason == "" {
+						reason = "Unknown"
+					}
+					ci.HasLastTermination = true
+					ci.LastTermReason = reason
+					ci.LastTermExitCode = lt.ExitCode
+				}
+			} else {
+				ci.State = "no status available"
+			}
+			containers = append(containers, ci)
+		}
+
+		result = append(result, PodInfo{
+			PodName:    pod.Name,
+			Namespace:  pod.Namespace,
+			Phase:      string(pod.Status.Phase),
+			NodeName:   nodeName,
+			CreatedAt:  pod.CreationTimestamp.Format(time.RFC3339),
+			Containers: containers,
+		})
+	}
+
+	return result, nil
+}
+
+// eventTimestamp returns best available event timestamp.
+func eventTimestamp(e corev1.Event) time.Time {
+	if !e.LastTimestamp.IsZero() {
+		return e.LastTimestamp.Time
+	}
+	if !e.FirstTimestamp.IsZero() {
+		return e.FirstTimestamp.Time
+	}
+	return time.Time{}
+}
+
+// GetPodEvents retrieves Kubernetes Events filtered by involvedObject.name=<podName>.
+func (p *LocalKubernetesProvider) GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error) {
+	fieldSelector := fmt.Sprintf(
+		"involvedObject.name=%s,involvedObject.namespace=%s,involvedObject.kind=Pod",
+		podName, namespace,
+	)
+
+	events, err := p.clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: fieldSelector,
+	})
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeCollectionFailed,
+			Message: fmt.Sprintf("failed to retrieve events for pod %q", podName),
+			Err:     err,
+		}
+	}
+
+	sorted := make([]corev1.Event, len(events.Items))
+	copy(sorted, events.Items)
+	sort.Slice(sorted, func(i, j int) bool {
+		return eventTimestamp(sorted[i]).Before(eventTimestamp(sorted[j]))
+	})
+
+	result := make([]EventInfo, 0, len(sorted))
+	for _, ev := range sorted {
+		ei := EventInfo{
+			PodName:      podName,
+			Namespace:    ev.Namespace,
+			Type:         ev.Type,
+			Reason:       ev.Reason,
+			Message:      ev.Message,
+			InvolvedKind: ev.InvolvedObject.Kind,
+			InvolvedName: ev.InvolvedObject.Name,
+			Source:       ev.Source.Component,
+			Count:        ev.Count,
+		}
+		if !ev.FirstTimestamp.IsZero() {
+			ei.FirstSeen = ev.FirstTimestamp.Format(time.RFC3339)
+		}
+		if !ev.LastTimestamp.IsZero() {
+			ei.LastSeen = ev.LastTimestamp.Format(time.RFC3339)
+		}
+		result = append(result, ei)
+	}
+
+	return result, nil
+}
+
+// GetContainerLogs retrieves bounded container logs.
+func (p *LocalKubernetesProvider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, tailLines int64) (ContainerLogInfo, error) {
+	result := ContainerLogInfo{
+		PodName:       podName,
+		Namespace:     namespace,
+		ContainerName: containerName,
+		LineLimit:     tailLines,
+	}
+
+	logOpts := &corev1.PodLogOptions{
+		Container: containerName,
+		TailLines: &tailLines,
+	}
+
+	req := p.clientset.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "waiting to start") || strings.Contains(errMsg, "ContainerCreating") {
+			result.Unavailable = true
+			result.UnavailableReason = "container not yet started"
+		} else {
+			result.APIError = true
+			result.APIErrorMsg = errMsg
+		}
+		return result, nil
+	}
+	defer stream.Close()
+
+	buf, err := io.ReadAll(stream)
+	if err != nil {
+		result.APIError = true
+		result.APIErrorMsg = fmt.Sprintf("error reading log stream: %v", err)
+		return result, nil
+	}
+
+	logContent := strings.TrimRight(string(buf), "\n")
+	if logContent == "" {
+		result.Unavailable = true
+		result.UnavailableReason = "no log output available"
+		return result, nil
+	}
+
+	lines := strings.Split(logContent, "\n")
+	result.Lines = lines
+	result.LinesRetrieved = len(lines)
+	return result, nil
+}
