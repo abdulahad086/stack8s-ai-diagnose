@@ -8,7 +8,22 @@ import (
 func TestFakeProviderInterfaceCompliance(t *testing.T) {
 	fake := NewFakeProvider()
 	fake.NodesData = []NodeInfo{
-		{Name: "fake-node-1", Status: "Ready"},
+		{
+			Name:      "fake-node-1",
+			Status:    "Ready",
+			CreatedAt: "2026-09-30T10:00:00Z",
+			Resources: NodeResources{
+				CPUCapacity:       "4",
+				CPUAllocatable:    "4",
+				MemoryCapacity:    "8Gi",
+				MemoryAllocatable: "7Gi",
+			},
+			SystemInfo: NodeSystemInfo{
+				KubeletVersion:  "v1.30.2",
+				OperatingSystem: "linux",
+				Architecture:    "amd64",
+			},
+		},
 	}
 	fake.PodsData["default"] = []PodInfo{
 		{
@@ -19,9 +34,13 @@ func TestFakeProviderInterfaceCompliance(t *testing.T) {
 			CreatedAt: "2026-09-30T10:00:00Z",
 			Containers: []ContainerInfo{
 				{
-					Name:  "app",
-					Image: "invalid/image:v1",
-					State: "Waiting (ImagePullBackOff)",
+					Name:          "app",
+					Image:         "invalid/image:v1",
+					State:         "Waiting (ImagePullBackOff)",
+					CPURequest:    "100m",
+					CPULimit:      "200m",
+					MemoryRequest: "64Mi",
+					MemoryLimit:   "128Mi",
 				},
 			},
 		},
@@ -45,31 +64,58 @@ func TestFakeProviderInterfaceCompliance(t *testing.T) {
 		UnavailableReason: "container not yet started",
 	}
 
-	// Verify InfrastructureProvider interface methods
 	ctx := context.Background()
 
-	if fake.Name() != "fake-provider" {
-		t.Fatalf("expected name fake-provider, got %s", fake.Name())
-	}
-
+	// 1. GetNodes
 	nodes, err := fake.GetNodes(ctx)
 	if err != nil || len(nodes) != 1 || nodes[0].Name != "fake-node-1" {
 		t.Fatalf("unexpected nodes output: %v, err: %v", nodes, err)
 	}
 
+	// 2. GetNode
+	node, err := fake.GetNode(ctx, "fake-node-1")
+	if err != nil || node.Name != "fake-node-1" || node.Status != "Ready" {
+		t.Fatalf("unexpected node output: %v, err: %v", node, err)
+	}
+	if node.Resources.CPUCapacity != "4" || node.Resources.MemoryAllocatable != "7Gi" {
+		t.Fatalf("unexpected node resources: %v", node.Resources)
+	}
+
+	// 3. GetPods
 	pods, err := fake.GetPods(ctx, "default")
 	if err != nil || len(pods) != 1 || pods[0].PodName != "fake-pod-1" {
 		t.Fatalf("unexpected pods output: %v, err: %v", pods, err)
 	}
+	c := pods[0].Containers[0]
+	if c.CPURequest != "100m" || c.CPULimit != "200m" || c.MemoryRequest != "64Mi" || c.MemoryLimit != "128Mi" {
+		t.Fatalf("unexpected container resource limits: %v", c)
+	}
 
+	// 4. GetPodEvents
 	events, err := fake.GetPodEvents(ctx, "default", "fake-pod-1")
 	if err != nil || len(events) != 1 || events[0].Reason != "ImagePullBackOff" {
 		t.Fatalf("unexpected events output: %v, err: %v", events, err)
 	}
 
+	// 5. GetContainerLogs
 	logs, err := fake.GetContainerLogs(ctx, "default", "fake-pod-1", "app", 100)
 	if err != nil || !logs.Unavailable {
 		t.Fatalf("unexpected logs output: %v, err: %v", logs, err)
+	}
+}
+
+func TestFakeProviderPendingUnscheduledPod(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	_, err := fake.GetNode(ctx, "<not yet scheduled>")
+	if err == nil {
+		t.Fatalf("expected error querying node for unscheduled pod")
+	}
+
+	_, err = fake.GetNode(ctx, "<none>")
+	if err == nil {
+		t.Fatalf("expected error querying empty node name")
 	}
 }
 

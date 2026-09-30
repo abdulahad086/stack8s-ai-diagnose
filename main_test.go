@@ -2,6 +2,8 @@ package main
 
 import (
 	"testing"
+
+	"github.com/stack8s/stack8s-ai-diagnose/provider"
 )
 
 func TestDiagnosePod_ImagePullBackOff(t *testing.T) {
@@ -306,3 +308,73 @@ func TestDiagnosePod_Precedence_OOMOverBackoff(t *testing.T) {
 		t.Fatalf("expected evidence ID [E1], got %v", diag.EvidenceIDs)
 	}
 }
+
+func TestBuildEvidencePackage_NodeEvidence(t *testing.T) {
+	fake := provider.NewFakeProvider()
+	fake.NodesData = []provider.NodeInfo{
+		{
+			Name:   "node-1",
+			Status: "Ready",
+			Resources: provider.NodeResources{
+				CPUCapacity:       "4",
+				CPUAllocatable:    "4",
+				MemoryCapacity:    "8Gi",
+				MemoryAllocatable: "7Gi",
+			},
+		},
+	}
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:   "scheduled-pod",
+			Namespace: "default",
+			NodeName:  "node-1",
+			Containers: []provider.ContainerInfo{
+				{
+					Name:          "web",
+					Image:         "nginx:latest",
+					CPURequest:    "100m",
+					CPULimit:      "200m",
+					MemoryRequest: "64Mi",
+					MemoryLimit:   "128Mi",
+				},
+			},
+		},
+		{
+			PodName:   "unscheduled-pod",
+			Namespace: "default",
+			NodeName:  "<not yet scheduled>",
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+	if len(pkg.Pods) != 2 {
+		t.Fatalf("expected 2 pods in package, got %d", len(pkg.Pods))
+	}
+
+	// Verify scheduled pod node_status evidence
+	var scheduledNodeEv *NodeStatusData
+	for _, ev := range pkg.Pods[0].Evidence {
+		if ev.Source == SourceNodeStatus {
+			if nsd, ok := ev.Data.(NodeStatusData); ok {
+				scheduledNodeEv = &nsd
+			}
+		}
+	}
+	if scheduledNodeEv == nil || !scheduledNodeEv.NodeAssigned || scheduledNodeEv.NodeName != "node-1" {
+		t.Fatalf("unexpected node_status evidence for scheduled pod: %v", scheduledNodeEv)
+	}
+
+	// Verify unscheduled pod node_status evidence
+	var unscheduledNodeEv *NodeStatusData
+	for _, ev := range pkg.Pods[1].Evidence {
+		if ev.Source == SourceNodeStatus {
+			if nsd, ok := ev.Data.(NodeStatusData); ok {
+				unscheduledNodeEv = &nsd
+			}
+		}
+	}
+	if unscheduledNodeEv == nil || unscheduledNodeEv.NodeAssigned || unscheduledNodeEv.NodeName != "<none>" {
+		t.Fatalf("unexpected node_status evidence for unscheduled pod: %v", unscheduledNodeEv)
+	}
+}
+

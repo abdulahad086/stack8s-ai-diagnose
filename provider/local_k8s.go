@@ -75,7 +75,66 @@ func (p *LocalKubernetesProvider) ClusterHost() string {
 	return "unknown-cluster"
 }
 
-// GetNodes retrieves node list and maps to domain NodeInfo.
+// mapNodeInfo converts a raw corev1.Node into a domain NodeInfo object.
+func mapNodeInfo(node corev1.Node) NodeInfo {
+	status := "Unknown"
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == corev1.NodeReady {
+			switch cond.Status {
+			case corev1.ConditionTrue:
+				status = "Ready"
+			case corev1.ConditionFalse:
+				status = "NotReady"
+			case corev1.ConditionUnknown:
+				status = "Unknown"
+			}
+			break
+		}
+	}
+
+	res := NodeResources{}
+	if cpuCap, ok := node.Status.Capacity[corev1.ResourceCPU]; ok {
+		res.CPUCapacity = cpuCap.String()
+	}
+	if cpuAlloc, ok := node.Status.Allocatable[corev1.ResourceCPU]; ok {
+		res.CPUAllocatable = cpuAlloc.String()
+	}
+	if memCap, ok := node.Status.Capacity[corev1.ResourceMemory]; ok {
+		res.MemoryCapacity = memCap.String()
+	}
+	if memAlloc, ok := node.Status.Allocatable[corev1.ResourceMemory]; ok {
+		res.MemoryAllocatable = memAlloc.String()
+	}
+	if storageCap, ok := node.Status.Capacity[corev1.ResourceEphemeralStorage]; ok {
+		res.StorageCapacity = storageCap.String()
+	}
+	if storageAlloc, ok := node.Status.Allocatable[corev1.ResourceEphemeralStorage]; ok {
+		res.StorageAllocatable = storageAlloc.String()
+	}
+
+	sysInfo := NodeSystemInfo{
+		KubeletVersion:   node.Status.NodeInfo.KubeletVersion,
+		OperatingSystem:  node.Status.NodeInfo.OperatingSystem,
+		Architecture:     node.Status.NodeInfo.Architecture,
+		KernelVersion:    node.Status.NodeInfo.KernelVersion,
+		ContainerRuntime: node.Status.NodeInfo.ContainerRuntimeVersion,
+	}
+
+	var createdAt string
+	if !node.CreationTimestamp.IsZero() {
+		createdAt = node.CreationTimestamp.Format(time.RFC3339)
+	}
+
+	return NodeInfo{
+		Name:       node.Name,
+		Status:     status,
+		CreatedAt:  createdAt,
+		Resources:  res,
+		SystemInfo: sysInfo,
+	}
+}
+
+// GetNodes retrieves all cluster nodes and maps them to domain NodeInfo.
 func (p *LocalKubernetesProvider) GetNodes(ctx context.Context) ([]NodeInfo, error) {
 	nodes, err := p.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -88,23 +147,29 @@ func (p *LocalKubernetesProvider) GetNodes(ctx context.Context) ([]NodeInfo, err
 
 	result := make([]NodeInfo, 0, len(nodes.Items))
 	for _, node := range nodes.Items {
-		status := "Unknown"
-		for _, cond := range node.Status.Conditions {
-			if cond.Type == "Ready" {
-				if cond.Status == "True" {
-					status = "Ready"
-				} else {
-					status = "NotReady"
-				}
-				break
-			}
-		}
-		result = append(result, NodeInfo{
-			Name:   node.Name,
-			Status: status,
-		})
+		result = append(result, mapNodeInfo(node))
 	}
 	return result, nil
+}
+
+// GetNode retrieves detailed information for a specific node by name.
+func (p *LocalKubernetesProvider) GetNode(ctx context.Context, name string) (NodeInfo, error) {
+	if name == "" || name == "<not yet scheduled>" || name == "<none>" {
+		return NodeInfo{}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("invalid node name %q", name),
+		}
+	}
+
+	node, err := p.clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return NodeInfo{}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("node %q not found", name),
+			Err:     err,
+		}
+	}
+	return mapNodeInfo(*node), nil
 }
 
 // containerStateString formats a corev1.ContainerState into a domain string.
@@ -159,6 +224,21 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 				Name:  c.Name,
 				Image: c.Image,
 			}
+
+			// Extract container resource requests and limits
+			if cpuReq, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+				ci.CPURequest = cpuReq.String()
+			}
+			if cpuLim, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+				ci.CPULimit = cpuLim.String()
+			}
+			if memReq, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+				ci.MemoryRequest = memReq.String()
+			}
+			if memLim, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+				ci.MemoryLimit = memLim.String()
+			}
+
 			if cs, ok := statusMap[c.Name]; ok {
 				ci.Ready = cs.Ready
 				ci.RestartCount = cs.RestartCount

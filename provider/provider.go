@@ -10,13 +10,46 @@ import (
 // These domain types isolate the diagnostic system from infrastructure-specific
 // client libraries (such as client-go / corev1).
 
-// NodeInfo represents a cluster node.
-type NodeInfo struct {
-	Name   string `json:"name"`
-	Status string `json:"status"` // e.g. "Ready", "NotReady"
+// NodeResources holds normalized Kubernetes node resource quantities.
+//
+// Semantics:
+//   - Capacity: Total physical/virtual resource reported by the Node hardware.
+//   - Allocatable: Resource amount Kubernetes makes available for workload scheduling.
+//
+// Note: Capacity and Allocatable represent Kubernetes configuration/state limits.
+// They do NOT represent real-time runtime utilization or "free memory".
+type NodeResources struct {
+	CPUCapacity        string `json:"cpu_capacity"`
+	CPUAllocatable     string `json:"cpu_allocatable"`
+	MemoryCapacity     string `json:"memory_capacity"`
+	MemoryAllocatable  string `json:"memory_allocatable"`
+	StorageCapacity    string `json:"storage_capacity,omitempty"`
+	StorageAllocatable string `json:"storage_allocatable,omitempty"`
 }
 
-// ContainerInfo represents the state of a single container in a pod.
+// NodeSystemInfo holds node operating system and kernel metadata.
+type NodeSystemInfo struct {
+	KubeletVersion   string `json:"kubelet_version,omitempty"`
+	OperatingSystem  string `json:"operating_system,omitempty"`
+	Architecture     string `json:"architecture,omitempty"`
+	KernelVersion    string `json:"kernel_version,omitempty"`
+	ContainerRuntime string `json:"container_runtime,omitempty"`
+}
+
+// NodeInfo represents a cluster node.
+type NodeInfo struct {
+	Name       string         `json:"name"`
+	Status     string         `json:"status"` // "Ready", "NotReady", "Unknown"
+	CreatedAt  string         `json:"created_at,omitempty"`
+	Resources  NodeResources  `json:"resources"`
+	SystemInfo NodeSystemInfo `json:"system_info"`
+}
+
+// ContainerInfo represents the state and resource requirements of a single container in a pod.
+//
+// Semantics:
+//   - Request: Minimum resource guaranteed/reserved for the container by Kubernetes scheduler.
+//   - Limit: Maximum resource cap enforced for the container.
 type ContainerInfo struct {
 	Name               string `json:"name"`
 	Image              string `json:"image"`
@@ -26,6 +59,12 @@ type ContainerInfo struct {
 	HasLastTermination bool   `json:"has_last_termination"`
 	LastTermReason     string `json:"last_termination_reason,omitempty"`
 	LastTermExitCode   int32  `json:"last_termination_exit_code,omitempty"`
+
+	// Resource Requests and Limits (from workload configuration)
+	CPURequest    string `json:"cpu_request,omitempty"`
+	CPULimit      string `json:"cpu_limit,omitempty"`
+	MemoryRequest string `json:"memory_request,omitempty"`
+	MemoryLimit   string `json:"memory_limit,omitempty"`
 }
 
 // PodInfo represents the status and containers of a single pod.
@@ -95,13 +134,6 @@ const (
 )
 
 // ── Infrastructure Provider Interface ────────────────────────────────────────
-//
-// InfrastructureProvider abstracts the infrastructure query operations needed
-// by the stack8s-ai-diagnose engine.
-//
-// Implementations:
-//   - LocalKubernetesProvider: Queries local Kubernetes cluster via client-go.
-//   - Stack8sProvider (Future): Will query actual Stack8s infrastructure backend.
 
 type InfrastructureProvider interface {
 	// Name returns the provider identifier (e.g. "local-kubernetes").
@@ -110,10 +142,13 @@ type InfrastructureProvider interface {
 	// ClusterHost returns the host/URL of the cluster host.
 	ClusterHost() string
 
-	// GetNodes lists all nodes in the cluster.
+	// GetNodes lists all nodes in the cluster with capacity and status.
 	GetNodes(ctx context.Context) ([]NodeInfo, error)
 
-	// GetPods lists all pods in the given namespace.
+	// GetNode returns detailed information for a specific node by name.
+	GetNode(ctx context.Context, name string) (NodeInfo, error)
+
+	// GetPods lists all pods in the given namespace with container state & resource limits.
 	GetPods(ctx context.Context, namespace string) ([]PodInfo, error)
 
 	// GetPodEvents lists all events for a specific pod.

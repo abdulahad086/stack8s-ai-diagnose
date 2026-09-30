@@ -186,7 +186,7 @@ func collectContainerLogs(prov provider.InfrastructureProvider, namespace, podNa
 	}
 }
 
-// ── Feature 5: Unified Evidence Package ──────────────────────────────────────
+// ── Feature 5 & 10: Unified Evidence Package ──────────────────────────────────
 
 type EvidenceSource string
 
@@ -194,6 +194,7 @@ const (
 	SourcePodStatus       EvidenceSource = "pod_status"
 	SourceKubernetesEvent EvidenceSource = "kubernetes_event"
 	SourceContainerLogs   EvidenceSource = "container_logs"
+	SourceNodeStatus      EvidenceSource = "node_status"
 )
 
 type ContainerEvidenceData struct {
@@ -205,6 +206,10 @@ type ContainerEvidenceData struct {
 	LastTermReason     string `json:"last_termination_reason,omitempty"`
 	LastTermExitCode   int32  `json:"last_termination_exit_code,omitempty"`
 	HasLastTermination bool   `json:"has_last_termination"`
+	CPURequest         string `json:"cpu_request,omitempty"`
+	CPULimit           string `json:"cpu_limit,omitempty"`
+	MemoryRequest      string `json:"memory_request,omitempty"`
+	MemoryLimit        string `json:"memory_limit,omitempty"`
 }
 
 type PodStatusData struct {
@@ -214,6 +219,16 @@ type PodStatusData struct {
 	NodeName   string                  `json:"node_name"`
 	CreatedAt  string                  `json:"created_at"`
 	Containers []ContainerEvidenceData `json:"containers"`
+}
+
+type NodeStatusData struct {
+	NodeName     string                  `json:"node_name"`
+	NodeAssigned bool                    `json:"node_assigned"`
+	Status       string                  `json:"status,omitempty"`
+	Resources    *provider.NodeResources  `json:"resources,omitempty"`
+	SystemInfo   *provider.NodeSystemInfo `json:"system_info,omitempty"`
+	Unavailable  bool                    `json:"unavailable,omitempty"`
+	Reason       string                  `json:"reason,omitempty"`
 }
 
 type KubernetesEventData struct {
@@ -304,6 +319,10 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 				LastTermReason:     c.LastTermReason,
 				LastTermExitCode:   c.LastTermExitCode,
 				HasLastTermination: c.HasLastTermination,
+				CPURequest:         c.CPURequest,
+				CPULimit:           c.CPULimit,
+				MemoryRequest:      c.MemoryRequest,
+				MemoryLimit:        c.MemoryLimit,
 			})
 		}
 		podStatus := PodStatusData{
@@ -319,6 +338,45 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 			Source: SourcePodStatus,
 			Data:   podStatus,
 		})
+
+		// ── E_node-type: node_status (Feature 10) ─────────────────────────
+		if pod.NodeName != "" && pod.NodeName != "<not yet scheduled>" && pod.NodeName != "<none>" {
+			nodeInfo, err := prov.GetNode(context.TODO(), pod.NodeName)
+			if err != nil {
+				podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+					ID:     nextID(),
+					Source: SourceNodeStatus,
+					Data: NodeStatusData{
+						NodeName:     pod.NodeName,
+						NodeAssigned: true,
+						Unavailable:  true,
+						Reason:       err.Error(),
+					},
+				})
+			} else {
+				podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+					ID:     nextID(),
+					Source: SourceNodeStatus,
+					Data: NodeStatusData{
+						NodeName:     nodeInfo.Name,
+						NodeAssigned: true,
+						Status:       nodeInfo.Status,
+						Resources:    &nodeInfo.Resources,
+						SystemInfo:   &nodeInfo.SystemInfo,
+					},
+				})
+			}
+		} else {
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceNodeStatus,
+				Data: NodeStatusData{
+					NodeName:     "<none>",
+					NodeAssigned: false,
+					Reason:       "pod has no assigned node (unscheduled)",
+				},
+			})
+		}
 
 		// ── E2..N-type: kubernetes_event ─────────────────────────────────
 		events, err := prov.GetPodEvents(context.TODO(), pod.Namespace, pod.PodName)
@@ -383,6 +441,7 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 
 	return pkg
 }
+
 
 func printEvidenceSummary(pkg EvidencePackage) {
 	totalEvidence := 0

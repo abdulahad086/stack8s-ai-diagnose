@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 )
 
 // FakeProvider is an in-memory InfrastructureProvider used for unit testing
@@ -9,8 +10,8 @@ import (
 type FakeProvider struct {
 	ClusterName string
 	NodesData   []NodeInfo
-	PodsData    map[string][]PodInfo // namespace -> []PodInfo
-	EventsData  map[string][]EventInfo // podName -> []EventInfo
+	PodsData    map[string][]PodInfo        // namespace -> []PodInfo
+	EventsData  map[string][]EventInfo      // podName -> []EventInfo
 	LogsData    map[string]ContainerLogInfo // podName/container -> ContainerLogInfo
 }
 
@@ -33,6 +34,24 @@ func (f *FakeProvider) ClusterHost() string {
 
 func (f *FakeProvider) GetNodes(ctx context.Context) ([]NodeInfo, error) {
 	return f.NodesData, nil
+}
+
+func (f *FakeProvider) GetNode(ctx context.Context, name string) (NodeInfo, error) {
+	if name == "" || name == "<not yet scheduled>" || name == "<none>" {
+		return NodeInfo{}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("invalid node name %q", name),
+		}
+	}
+	for _, n := range f.NodesData {
+		if n.Name == name {
+			return n, nil
+		}
+	}
+	return NodeInfo{}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("node %q not found in fake provider", name),
+	}
 }
 
 func (f *FakeProvider) GetPods(ctx context.Context, namespace string) ([]PodInfo, error) {

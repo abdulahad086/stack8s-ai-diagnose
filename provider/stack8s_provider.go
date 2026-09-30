@@ -10,16 +10,6 @@ import (
 // Stack8sProvider will implement the InfrastructureProvider interface against the
 // actual Stack8s infrastructure backend and control plane API.
 //
-// Key Contract Requirements:
-//   - Must satisfy the provider.InfrastructureProvider interface methods:
-//       GetNodes(ctx)
-//       GetPods(ctx, namespace)
-//       GetPodEvents(ctx, namespace, podName)
-//       GetContainerLogs(ctx, namespace, podName, containerName, tailLines)
-//   - Must map Stack8s internal cluster/workload API responses into domain types:
-//       NodeInfo, PodInfo, EventInfo, ContainerLogInfo
-//   - Must NOT alter EvidencePackage schema or DiagnosisEngine interfaces.
-//
 // TODO: Implement Stack8sProvider after access to the actual Stack8s backend/API is available.
 
 type Stack8sProvider struct {
@@ -44,6 +34,10 @@ func (s *Stack8sProvider) ClusterHost() string {
 
 func (s *Stack8sProvider) GetNodes(ctx context.Context) ([]NodeInfo, error) {
 	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetNode(ctx context.Context, name string) (NodeInfo, error) {
+	return NodeInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }
 
 func (s *Stack8sProvider) GetPods(ctx context.Context, namespace string) ([]PodInfo, error) {

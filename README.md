@@ -645,5 +645,48 @@ Feature 9 introduces a provider-based abstraction (`provider.InfrastructureProvi
 - **Future Integration Contract:** Documented placeholder in `provider/stack8s_provider.go` ready for future Stack8s infrastructure backend integration without altering diagnostic engine code.
 - **Architecture Specification:** Detailed specification documented in [`ARCHITECTURE.md`](file:///Users/mac/Desktop/ai-stack8s/stack8s-ai-diagnose/ARCHITECTURE.md).
 
+---
+
+## Feature 10 — Node & Resource Evidence Collector
+
+> **Node capacity and allocatable are configuration/state information reported by Kubernetes. They are not equivalent to real-time resource utilization.**
+
+### Purpose & Scope
+
+Feature 10 extends the provider abstraction and unified evidence package to collect real Kubernetes Node capacity, allocatable resources, system metadata, and container resource requests/limits.
+
+### Resource Semantics & Definitions
+
+| Resource Term | Source | Definition |
+|---------------|--------|------------|
+| **`Capacity`** | Node Status | Total physical/virtual resource reported by the Node hardware. |
+| **`Allocatable`** | Node Status | Resource amount Kubernetes makes available for workload scheduling after reserving system memory/CPU. |
+| **`Request`** | Pod Workload Spec | Minimum resource guaranteed/reserved for a container by the Kubernetes scheduler. |
+| **`Limit`** | Pod Workload Spec | Maximum resource cap enforced for a container. |
+
+### Domain Models & Provider Interface
+
+Added to `provider.InfrastructureProvider`:
+- `GetNode(ctx, name) (NodeInfo, error)`
+
+Domain Types:
+- `NodeInfo`: `Name`, `Status` (`Ready`/`NotReady`/`Unknown`), `CreatedAt`, `Resources`, `SystemInfo`.
+- `NodeResources`: `CPUCapacity`, `CPUAllocatable`, `MemoryCapacity`, `MemoryAllocatable`, `StorageCapacity`, `StorageAllocatable`.
+- `NodeSystemInfo`: `KubeletVersion`, `OperatingSystem`, `Architecture`, `KernelVersion`, `ContainerRuntime`.
+- `ContainerInfo`: Includes `CPURequest`, `CPULimit`, `MemoryRequest`, `MemoryLimit`.
+
+### Evidence Package Integration (`node_status`)
+
+Node evidence is attached to the `EvidencePackage` as `node_status` evidence items:
+
+- **Scheduled Pods:** Includes node status, CPU/memory capacity, allocatable resources, OS, kernel, and container runtime version.
+- **Unscheduled / Pending Pods:** Sets `node_assigned = false`, `node_name = "<none>"`, and records reason `"pod has no assigned node (unscheduled)"` without inventing a fake node.
+
+### Controlled Resource Tests
+
+1. **Resource Specification Test (`test-resource-spec`):** harmless Pod specifying `requests: {cpu: "100m", memory: "64Mi"}` and `limits: {cpu: "200m", memory: "128Mi"}` verified via `kubectl` and collector.
+2. **Resource Scheduling Failure Test (`test-pending-cpu`):** safe Pod requesting `cpu: "500"` (500 CPUs, exceeding node allocatable CPU of 4) verified via `kubectl` to trigger `FailedScheduling` (`0/1 nodes are available: 1 Insufficient cpu.`). Verified `node_assigned = false` in evidence package and cleaned up.
+
+
 
 
