@@ -74,7 +74,7 @@ No Secret values, environment variables, passwords, tokens, certificates, or kub
 ## Feature 3 — Kubernetes Events Collector
 
 ### What Kubernetes Events are
-Kubernetes Events are structured records written by the control plane and kubelet when something significant happens to a workload — scheduling, image pulling, container starting, OOMKills, back-offs, etc.
+Kubernetes Events are structured records written by the control plane and kubelet when something significant happens to a workload.
 
 ### Why Events are useful for diagnosis
 - Show the exact sequence of actions Kubernetes took for a pod.
@@ -97,7 +97,7 @@ Kubernetes Events are structured records written by the control plane and kubele
 | 10 | Source component | `event.Source.Component` |
 
 ### How events are filtered
-Field selector: `involvedObject.name=<podName>,involvedObject.namespace=<ns>,involvedObject.kind=Pod` — same strategy as `kubectl describe pod`.
+Field selector: `involvedObject.name=<podName>,involvedObject.namespace=<ns>,involvedObject.kind=Pod`
 
 ### How to verify with kubectl
 ```bash
@@ -110,132 +110,190 @@ kubectl describe pod <pod-name> -n default
 ## Feature 4 — Container Logs Collector
 
 ### What container logs are
-Container logs are the raw stdout/stderr output produced by the application running inside a Kubernetes container. They are the primary source of application-level diagnostic information — startup errors, connection failures, authentication errors, crashes, configuration problems, and exceptions.
-
-### Why logs are useful for diagnosis
-- Reveal the exact error message an application printed before crashing.
-- Show configuration issues that Kubernetes itself cannot see.
-- Provide application-level context that supplements Kubernetes Events.
-- Essential for diagnosing `CrashLoopBackOff`, `OOMKilled`, and silent failures.
+Container logs are the raw stdout/stderr output produced by the application running inside a Kubernetes container.
 
 ### How logs are retrieved
-Uses the Kubernetes Logs API via `client-go`:
-```go
-clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
-    Container: containerName,
-    TailLines: &tailLines,   // bounded — never streams indefinitely
-}).Stream(context.TODO())
-```
-This is a **snapshot collector**, not a live log tailer. Logs are read once and the stream is closed immediately.
+Uses `clientset.CoreV1().Pods(namespace).GetLogs(podName, &PodLogOptions{TailLines: &limit})`. Snapshot only — never streams indefinitely.
 
 ### Current line limit
-**100 lines** (most recent). Defined by the `defaultLogTailLines` constant. Never requests unbounded log history.
-
-### Namespace scope
-`default` — matches Feature 2 and Feature 3.
-
-### Container selection behaviour
-
-| Scenario | Behaviour |
-|----------|-----------|
-| Single-container pod | Container selected automatically |
-| Multi-container pod | Logs collected for **each** container in `pod.Spec.Containers` order |
-| Container not yet started (`Waiting`) | Prints `No logs available for container: <name> (container not yet started)` — non-fatal |
-| Container name does not exist | Kubernetes API returns error → printed as `WARNING` — non-fatal |
-| Empty log output | Prints `No logs available for container: <name>` — non-fatal |
-| Log stream read error | Printed as `WARNING` — non-fatal |
+**100 lines** (most recent). Defined by the `defaultLogTailLines` constant.
 
 ### Security considerations
-- **No Secret values are collected or printed.**
-- No credentials, tokens, certificates, or kubeconfig contents are printed.
-- Log content is passed through from the Kubernetes API as-is. Application logs may contain sensitive data — treat them accordingly in production use.
-- Logs are bounded to 100 lines per container. No unbounded retrieval.
-- No log persistence is implemented. Logs are only printed during the diagnostic run.
+- No Secret values are collected or printed.
+- Log content is passed through from the Kubernetes API as-is.
+- Logs are bounded to 100 lines per container.
 
 ### How to verify with kubectl
 ```bash
-# Last 100 lines for a specific container
 kubectl logs <pod-name> -n default -c <container-name> --tail=100
-
-# All logs for a single-container pod
-kubectl logs <pod-name> -n default
 ```
 
-### Actual test results (Feature 4)
+---
 
-#### Test A — `test-logger` (busybox:1.36, `Completed` pod)
+## Feature 5 — Unified Evidence Package
 
-Workload:
-```yaml
-name: test-logger
-container: logger
-image: busybox:1.36
-command: echo STACK8S_TEST_LOG_1 && ... && echo 'feature4 log collector verified'
-restartPolicy: Never
+### What an Evidence Package is
+
+The Evidence Package is a single, machine-readable JSON document that combines the Pod status, Kubernetes Events, and Container Logs already collected by Features 2–4 into one normalised structure.
+
+> **Training data is separate from runtime evidence.**
+> The Evidence Package contains information collected from the actual Kubernetes cluster. Nothing is invented, inferred, or mocked.
+
+Its purpose is to serve as structured input for a future diagnostic step (Needle 3). Feature 5 only builds and serialises the package — no AI is involved.
+
+### Why normalisation is required
+
+Features 2–4 print human-readable output to stdout. The Evidence Package:
+- provides machine-readable JSON for downstream consumers
+- assigns every piece of evidence a **unique ID** (`E1`, `E2`, …)
+- records a consistent collection timestamp
+- clearly represents partial failures (e.g. an event API error) without fabricating data
+
+### Evidence ID concept
+
+Every individual piece of evidence is assigned a sequential ID within a single run:
+
+```
+E1  → pod_status        (first pod)
+E2  → kubernetes_event  (first event for that pod)
+E3  → kubernetes_event  ...
+E7  → container_logs    (first container logs)
+E8  → pod_status        (second pod)
+E9  → container_logs    (second pod's container logs)
 ```
 
-**kubectl reference:**
-```
-STACK8S_TEST_LOG_1
-STACK8S_TEST_LOG_2
-STACK8S_TEST_LOG_3
-STACK8S_TEST_LOG_4
-STACK8S_TEST_LOG_5
-feature4 log collector verified
+IDs are:
+- unique within a collection run
+- sequential and deterministic (same pod order → same IDs)
+- never duplicated within one package
+
+### Evidence source types
+
+| Source constant | Value | Meaning |
+|-----------------|-------|---------|
+| `SourcePodStatus` | `pod_status` | Feature 2 pod + container status |
+| `SourceKubernetesEvent` | `kubernetes_event` | Feature 3 Kubernetes event |
+| `SourceContainerLogs` | `container_logs` | Feature 4 container log snapshot |
+
+### Go types introduced
+
+| Type | Purpose |
+|------|---------|
+| `EvidenceSource` | Typed string constant for source identification |
+| `ContainerEvidenceData` | Normalised container status (F2) |
+| `PodStatusData` | Normalised pod status (F2) |
+| `KubernetesEventData` | Normalised Kubernetes event (F3) |
+| `ContainerLogsData` | Normalised log snapshot (F4) |
+| `EvidenceItem` | One evidence item: `{id, source, data}` |
+| `PodEvidencePackage` | All evidence for one pod |
+| `EvidencePackage` | Top-level: cluster + namespace + all pods |
+| `EventCollectionResult` | Internal: clearly separates empty vs API error |
+
+### JSON structure
+
+```json
+{
+  "cluster": "https://127.0.0.1:6443",
+  "namespace": "default",
+  "collected_at": "2026-09-30T08:03:45Z",
+  "pods": [
+    {
+      "pod_name": "test-logger",
+      "namespace": "default",
+      "collected_at": "2026-09-30T08:03:45Z",
+      "evidence": [
+        {
+          "id": "E1",
+          "source": "pod_status",
+          "data": { ... }
+        },
+        {
+          "id": "E2",
+          "source": "kubernetes_event",
+          "data": { ... }
+        },
+        {
+          "id": "E7",
+          "source": "container_logs",
+          "data": { ... }
+        }
+      ]
+    }
+  ]
+}
 ```
 
-**Go program output:**
-```
-── Container Logs: test-logger / logger (last 100 lines) ─────────────
-Lines retrieved: 6
+### Error representation
 
-│ STACK8S_TEST_LOG_1
-│ STACK8S_TEST_LOG_2
-│ STACK8S_TEST_LOG_3
-│ STACK8S_TEST_LOG_4
-│ STACK8S_TEST_LOG_5
-│ feature4 log collector verified
-```
-All 6 lines match exactly. ✅
+The package clearly distinguishes between:
 
-#### Test B — `test-nginx` (nginx:1.27-alpine, `Running` pod)
+| Situation | Representation |
+|-----------|---------------|
+| No events exist for the pod | No `kubernetes_event` items in evidence list |
+| Event API call failed | One `kubernetes_event` item with `"api_error": true, "api_error_message": "..."` |
+| Container has no log output | `container_logs` item with `"unavailable": true, "unavailable_reason": "no log output available"` |
+| Container not yet started | `container_logs` item with `"unavailable": true, "unavailable_reason": "container not yet started"` |
+| Log API call failed | `container_logs` item with `"api_error": true, "api_error_message": "..."` |
 
-**kubectl reference:**
-```
-/docker-entrypoint.sh: /docker-entrypoint.d/ is not empty, will attempt to perform configuration
-...
-2026/09/30 06:58:56 [notice] 1#1: nginx/1.27.5
-2026/09/30 06:58:56 [notice] 1#1: start worker processes
-2026/09/30 06:58:56 [notice] 1#1: start worker process 30
-...
+**No fake evidence is ever inserted. A failure is always represented as a failure.**
+
+### Security considerations
+- No Secret values, credentials, tokens, certificates, or kubeconfig contents are included in the package.
+- Log content is bounded to 100 lines per container.
+- Event messages are passed through from the Kubernetes API unchanged.
+- The package does not persist to disk (printed to stdout only in this MVP).
+
+### How to run
+```bash
+go run main.go
 ```
 
-**Go program output:**
-```
-── Container Logs: test-nginx / nginx (last 100 lines) ─────────────
-Lines retrieved: 19
+All features (F1–F5) run in a single invocation. The Evidence Package JSON is printed at the end.
 
-│ /docker-entrypoint.sh: /docker-entrypoint.d/ is not empty, will attempt to perform configuration
-│ /docker-entrypoint.sh: Looking for shell scripts in /docker-entrypoint.d/
-│ ...
-│ 2026/09/30 06:58:56 [notice] 1#1: nginx/1.27.5
-│ 2026/09/30 06:58:56 [notice] 1#1: start worker processes
-│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 30
-│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 31
-│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 32
-│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 33
+### How to verify
+```bash
+# Validate JSON is well-formed
+go run main.go | tail -200 | python3 -m json.tool > /dev/null && echo "Valid JSON"
 ```
-19 lines retrieved, content matches kubectl. ✅
+
+### Actual test result (Feature 5)
+
+**Pods collected:** `test-logger` (Completed), `test-nginx` (Running)
+
+**Evidence summary:**
+```
+  Cluster      : https://127.0.0.1:6443
+  Namespace    : default
+  Collected At : 2026-09-30T08:03:45Z
+  Pods         : 2
+  Evidence Count: 9
+
+  Pod: test-logger
+    E1 → pod_status
+    E2 → kubernetes_event  (Scheduled)
+    E3 → kubernetes_event  (Pulling)
+    E4 → kubernetes_event  (Pulled)
+    E5 → kubernetes_event  (Created)
+    E6 → kubernetes_event  (Started)
+    E7 → container_logs    (6 lines)
+
+  Pod: test-nginx
+    E8 → pod_status
+    E9 → container_logs    (19 lines)
+```
+
+> **Note on missing test-nginx events:** Kubernetes Events have a default TTL of ~1 hour. At the time of the Feature 5 run, `test-nginx` was ~65 minutes old so its events had already been garbage-collected by Kubernetes. The collector correctly returns **no** event items — it does not fabricate them. This is an example of the "no events exist" vs "API error" distinction working correctly.
+
+**JSON round-trip:** The generated JSON was verified to parse back into `EvidencePackage` without error. ✅
 
 ### Limitations
-- Only `default` namespace is queried (MVP scope).
-- Log line limit is fixed at 100 per container (configurable by changing `defaultLogTailLines`).
-- No log persistence — diagnostic run only.
-- If events have expired from Kubernetes TTL, they will not appear (Kubernetes behaviour, not a collector bug).
+- Evidence Package is printed to stdout only (no file persistence yet).
+- Only `default` namespace is queried.
+- Log tail limit is 100 lines per container.
+- Event TTL expiry is a Kubernetes limitation, not a collector bug.
 
 ### Test pods
 
-Both test pods are left in the `default` namespace. To clean up:
 ```bash
 kubectl delete pod test-nginx test-logger -n default
 ```

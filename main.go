@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,8 @@ import (
 // defaultLogTailLines is the maximum number of recent log lines retrieved per
 // container. Bounded to avoid retrieving unbounded log history.
 const defaultLogTailLines int64 = 100
+
+// ── Shared Client ─────────────────────────────────────────────────────────────
 
 // buildClient resolves the kubeconfig and returns a REST config + typed clientset.
 // It respects the $KUBECONFIG environment variable, falling back to ~/.kube/config.
@@ -295,16 +298,12 @@ func collectContainerLogs(clientset *kubernetes.Clientset, namespace, podName, c
 	logOpts := &corev1.PodLogOptions{
 		Container: containerName,
 		TailLines: &tailLines,
-		// Timestamps are disabled: they add RFC3339 prefixes that clutter output.
-		// Enable here if timestamp-per-line is needed: Timestamps: true,
 	}
 
 	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
 
 	stream, err := req.Stream(context.TODO())
 	if err != nil {
-		// Common non-fatal causes: container still starting, container name wrong,
-		// pod in Pending state. Treat as WARNING so other pods still print.
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "waiting to start") ||
 			strings.Contains(errMsg, "ContainerCreating") {
@@ -330,7 +329,6 @@ func collectContainerLogs(clientset *kubernetes.Clientset, namespace, podName, c
 		return
 	}
 
-	// Print each log line indented for readability
 	lines := strings.Split(logContent, "\n")
 	fmt.Printf("    Lines retrieved: %d\n", len(lines))
 	fmt.Println()
@@ -339,16 +337,397 @@ func collectContainerLogs(clientset *kubernetes.Clientset, namespace, podName, c
 	}
 }
 
+// ── Feature 5: Unified Evidence Package ──────────────────────────────────────
+//
+// The evidence package normalises the data already collected by Features 2–4
+// into a single machine-readable structure keyed by unique evidence IDs (E1, E2 …).
+//
+// IMPORTANT:
+//   - Training data is separate from runtime evidence.
+//   - The Evidence Package contains information collected from the actual
+//     Kubernetes cluster. Nothing is invented, inferred, or mocked.
+//   - No Secret values, credentials, tokens, or kubeconfig contents are included.
+//   - Partial failures are represented honestly: if events are unavailable,
+//     that is recorded — fake events are never inserted.
+
+// ── Evidence structs ──────────────────────────────────────────────────────────
+
+// EvidenceSource identifies where a piece of evidence came from.
+type EvidenceSource string
+
+const (
+	SourcePodStatus       EvidenceSource = "pod_status"
+	SourceKubernetesEvent EvidenceSource = "kubernetes_event"
+	SourceContainerLogs   EvidenceSource = "container_logs"
+)
+
+// ContainerEvidenceData holds the normalised status for one container (Feature 2).
+type ContainerEvidenceData struct {
+	Name               string `json:"name"`
+	Image              string `json:"image"`
+	Ready              bool   `json:"ready"`
+	RestartCount       int32  `json:"restart_count"`
+	State              string `json:"state"`
+	LastTermReason     string `json:"last_termination_reason,omitempty"`
+	LastTermExitCode   int32  `json:"last_termination_exit_code,omitempty"`
+	HasLastTermination bool   `json:"has_last_termination"`
+}
+
+// PodStatusData holds the normalised pod status (Feature 2).
+type PodStatusData struct {
+	PodName    string                  `json:"pod_name"`
+	Namespace  string                  `json:"namespace"`
+	Phase      string                  `json:"phase"`
+	NodeName   string                  `json:"node_name"`
+	CreatedAt  string                  `json:"created_at"`
+	Containers []ContainerEvidenceData `json:"containers"`
+}
+
+// KubernetesEventData holds one normalised Kubernetes Event (Feature 3).
+type KubernetesEventData struct {
+	PodName       string `json:"pod_name"`
+	Namespace     string `json:"namespace"`
+	Type          string `json:"type"`
+	Reason        string `json:"reason"`
+	Message       string `json:"message"`
+	InvolvedKind  string `json:"involved_object_kind"`
+	InvolvedName  string `json:"involved_object_name"`
+	Source        string `json:"source_component,omitempty"`
+	Count         int32  `json:"count,omitempty"`
+	FirstSeen     string `json:"first_seen,omitempty"`
+	LastSeen      string `json:"last_seen,omitempty"`
+}
+
+// ContainerLogsData holds the normalised container log snapshot (Feature 4).
+type ContainerLogsData struct {
+	PodName       string   `json:"pod_name"`
+	Namespace     string   `json:"namespace"`
+	ContainerName string   `json:"container_name"`
+	LineLimit     int64    `json:"line_limit"`
+	LinesRetrieved int     `json:"lines_retrieved"`
+	Lines         []string `json:"lines"`
+	// Error fields — distinguish "no logs exist" from "API failed"
+	Unavailable   bool   `json:"unavailable"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	APIError      bool   `json:"api_error"`
+	APIErrorMsg   string `json:"api_error_message,omitempty"`
+}
+
+// EvidenceItem is one normalised piece of evidence with a unique ID.
+type EvidenceItem struct {
+	ID     string         `json:"id"`
+	Source EvidenceSource `json:"source"`
+	Data   any            `json:"data"`
+}
+
+// EventCollectionResult holds the outcome of gathering events for a pod.
+// It clearly distinguishes "no events" from "API error".
+type EventCollectionResult struct {
+	Items      []KubernetesEventData
+	APIError   bool
+	APIErrorMsg string
+}
+
+// PodEvidencePackage is the unified evidence for a single pod.
+type PodEvidencePackage struct {
+	PodName     string         `json:"pod_name"`
+	Namespace   string         `json:"namespace"`
+	CollectedAt string         `json:"collected_at"`
+	Evidence    []EvidenceItem `json:"evidence"`
+}
+
+// EvidencePackage is the top-level output of Feature 5.
+type EvidencePackage struct {
+	Cluster     string               `json:"cluster"`
+	Namespace   string               `json:"namespace"`
+	CollectedAt string               `json:"collected_at"`
+	Pods        []PodEvidencePackage `json:"pods"`
+}
+
+// ── Data-gathering functions (return structs, do not print) ──────────────────
+
+// gatherPodStatus normalises a corev1.Pod into a PodStatusData struct.
+func gatherPodStatus(pod corev1.Pod) PodStatusData {
+	nodeName := pod.Spec.NodeName
+	if nodeName == "" {
+		nodeName = "<not yet scheduled>"
+	}
+
+	statusMap := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses))
+	for _, cs := range pod.Status.ContainerStatuses {
+		statusMap[cs.Name] = cs
+	}
+
+	containers := make([]ContainerEvidenceData, 0, len(pod.Spec.Containers))
+	for _, c := range pod.Spec.Containers {
+		ced := ContainerEvidenceData{
+			Name:  c.Name,
+			Image: c.Image,
+		}
+		if cs, ok := statusMap[c.Name]; ok {
+			ced.Ready = cs.Ready
+			ced.RestartCount = cs.RestartCount
+			ced.State = containerState(cs.State)
+			if cs.LastTerminationState.Terminated != nil {
+				lt := cs.LastTerminationState.Terminated
+				reason := lt.Reason
+				if reason == "" {
+					reason = "Unknown"
+				}
+				ced.HasLastTermination = true
+				ced.LastTermReason = reason
+				ced.LastTermExitCode = lt.ExitCode
+			}
+		} else {
+			ced.State = "no status available"
+		}
+		containers = append(containers, ced)
+	}
+
+	return PodStatusData{
+		PodName:    pod.Name,
+		Namespace:  pod.Namespace,
+		Phase:      string(pod.Status.Phase),
+		NodeName:   nodeName,
+		CreatedAt:  pod.CreationTimestamp.Format(time.RFC3339),
+		Containers: containers,
+	}
+}
+
+// gatherEvents queries Kubernetes Events for a specific pod and returns a
+// structured result. Clearly distinguishes "no events" from "API error".
+// No fake events are ever inserted.
+func gatherEvents(clientset *kubernetes.Clientset, namespace, podName string) EventCollectionResult {
+	fieldSelector := fmt.Sprintf(
+		"involvedObject.name=%s,involvedObject.namespace=%s,involvedObject.kind=Pod",
+		podName, namespace,
+	)
+
+	events, err := clientset.CoreV1().Events(namespace).List(context.TODO(), metav1.ListOptions{
+		FieldSelector: fieldSelector,
+	})
+	if err != nil {
+		return EventCollectionResult{APIError: true, APIErrorMsg: err.Error()}
+	}
+
+	// Sort chronologically
+	sorted := make([]corev1.Event, len(events.Items))
+	copy(sorted, events.Items)
+	sort.Slice(sorted, func(i, j int) bool {
+		return eventTimestamp(sorted[i]).Before(eventTimestamp(sorted[j]))
+	})
+
+	items := make([]KubernetesEventData, 0, len(sorted))
+	for _, ev := range sorted {
+		ked := KubernetesEventData{
+			PodName:      podName,
+			Namespace:    ev.Namespace,
+			Type:         ev.Type,
+			Reason:       ev.Reason,
+			Message:      ev.Message,
+			InvolvedKind: ev.InvolvedObject.Kind,
+			InvolvedName: ev.InvolvedObject.Name,
+			Source:       ev.Source.Component,
+			Count:        ev.Count,
+		}
+		if !ev.FirstTimestamp.IsZero() {
+			ked.FirstSeen = ev.FirstTimestamp.Format(time.RFC3339)
+		}
+		if !ev.LastTimestamp.IsZero() {
+			ked.LastSeen = ev.LastTimestamp.Format(time.RFC3339)
+		}
+		items = append(items, ked)
+	}
+
+	return EventCollectionResult{Items: items}
+}
+
+// gatherContainerLogs retrieves bounded container logs and returns a structured
+// ContainerLogsData. Clearly distinguishes empty logs from API errors.
+// No fake log lines are ever inserted. Credentials are never logged.
+func gatherContainerLogs(clientset *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64) ContainerLogsData {
+	result := ContainerLogsData{
+		PodName:       podName,
+		Namespace:     namespace,
+		ContainerName: containerName,
+		LineLimit:     tailLines,
+	}
+
+	logOpts := &corev1.PodLogOptions{
+		Container: containerName,
+		TailLines: &tailLines,
+	}
+
+	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
+	stream, err := req.Stream(context.TODO())
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "waiting to start") ||
+			strings.Contains(errMsg, "ContainerCreating") {
+			result.Unavailable = true
+			result.UnavailableReason = "container not yet started"
+		} else {
+			result.APIError = true
+			result.APIErrorMsg = errMsg
+		}
+		return result
+	}
+	defer stream.Close()
+
+	buf, err := io.ReadAll(stream)
+	if err != nil {
+		result.APIError = true
+		result.APIErrorMsg = fmt.Sprintf("error reading log stream: %v", err)
+		return result
+	}
+
+	logContent := strings.TrimRight(string(buf), "\n")
+	if logContent == "" {
+		result.Unavailable = true
+		result.UnavailableReason = "no log output available"
+		return result
+	}
+
+	lines := strings.Split(logContent, "\n")
+	result.Lines = lines
+	result.LinesRetrieved = len(lines)
+	return result
+}
+
+// ── Evidence package builder ─────────────────────────────────────────────────
+
+// buildEvidencePackage assembles the unified evidence package for all pods in
+// the given namespace. Evidence IDs are assigned sequentially (E1, E2, …)
+// across all pods in a single run.
+func buildEvidencePackage(clientset *kubernetes.Clientset, clusterHost, namespace string) EvidencePackage {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	pkg := EvidencePackage{
+		Cluster:     clusterHost,
+		Namespace:   namespace,
+		CollectedAt: now,
+	}
+
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: evidence package: failed to list pods: %v\n", err)
+		return pkg
+	}
+
+	evidenceCounter := 0
+	nextID := func() string {
+		evidenceCounter++
+		return fmt.Sprintf("E%d", evidenceCounter)
+	}
+
+	for _, pod := range pods.Items {
+		podPkg := PodEvidencePackage{
+			PodName:     pod.Name,
+			Namespace:   pod.Namespace,
+			CollectedAt: now,
+		}
+
+		// ── E1-type: pod_status ──────────────────────────────────────────
+		podStatus := gatherPodStatus(pod)
+		podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+			ID:     nextID(),
+			Source: SourcePodStatus,
+			Data:   podStatus,
+		})
+
+		// ── E2..N-type: kubernetes_event ─────────────────────────────────
+		evResult := gatherEvents(clientset, pod.Namespace, pod.Name)
+		if evResult.APIError {
+			// Represent the failure honestly — do not fabricate events
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceKubernetesEvent,
+				Data: map[string]any{
+					"pod_name":  pod.Name,
+					"namespace": pod.Namespace,
+					"api_error": true,
+					"api_error_message": evResult.APIErrorMsg,
+				},
+			})
+		} else {
+			for _, ev := range evResult.Items {
+				podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+					ID:     nextID(),
+					Source: SourceKubernetesEvent,
+					Data:   ev,
+				})
+			}
+		}
+
+		// ── En-type: container_logs ───────────────────────────────────────
+		for _, c := range pod.Spec.Containers {
+			logs := gatherContainerLogs(clientset, pod.Namespace, pod.Name, c.Name, defaultLogTailLines)
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceContainerLogs,
+				Data:   logs,
+			})
+		}
+
+		pkg.Pods = append(pkg.Pods, podPkg)
+	}
+
+	return pkg
+}
+
+// printEvidenceSummary prints the human-readable evidence summary section.
+func printEvidenceSummary(pkg EvidencePackage) {
+	totalEvidence := 0
+	for _, p := range pkg.Pods {
+		totalEvidence += len(p.Evidence)
+	}
+
+	fmt.Println()
+	fmt.Println("══════════════════════════════════════════════════════════════")
+	fmt.Println("  Unified Evidence Package — Feature 5")
+	fmt.Println("══════════════════════════════════════════════════════════════")
+	fmt.Printf("  Cluster      : %s\n", pkg.Cluster)
+	fmt.Printf("  Namespace    : %s\n", pkg.Namespace)
+	fmt.Printf("  Collected At : %s\n", pkg.CollectedAt)
+	fmt.Printf("  Pods         : %d\n", len(pkg.Pods))
+	fmt.Printf("  Evidence Count: %d\n", totalEvidence)
+	fmt.Println()
+
+	for _, p := range pkg.Pods {
+		fmt.Printf("  Pod: %s\n", p.PodName)
+		for _, ev := range p.Evidence {
+			fmt.Printf("    %s → %s\n", ev.ID, ev.Source)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println("── Evidence Package JSON ──────────────────────────────────────")
+	jsonBytes, err := json.MarshalIndent(pkg, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: failed to serialize evidence package: %v\n", err)
+		return
+	}
+	fmt.Println(string(jsonBytes))
+
+	// Verify JSON round-trips correctly
+	var roundTrip EvidencePackage
+	if err := json.Unmarshal(jsonBytes, &roundTrip); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: evidence package JSON failed to parse back: %v\n", err)
+	}
+}
+
 // ── Entry Point ───────────────────────────────────────────────────────────────
 
 func main() {
 	config, clientset := buildClient()
 
-	// Feature 1: list nodes
+	// Feature 1: list nodes (human-readable)
 	listNodes(clientset, config.Host)
 
-	// Feature 2: collect pod status from the default namespace
-	// Feature 3: collectEvents is called inside collectPods for each pod
-	// Feature 4: collectContainerLogs is called inside collectPods for each container
+	// Feature 2 + 3 + 4: pod status, events, logs (human-readable)
 	collectPods(clientset, "default")
+
+	// Feature 5: build and print unified evidence package
+	pkg := buildEvidencePackage(clientset, config.Host, "default")
+	printEvidenceSummary(pkg)
 }
