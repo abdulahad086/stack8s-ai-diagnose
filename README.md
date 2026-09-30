@@ -55,7 +55,7 @@ docker-desktop    Ready
 
 ### What it does
 
-Extends the Go program to retrieve and display the real status of all pods in the `default` namespace of the live Kubernetes cluster.
+Retrieves and displays the real status of all pods in the `default` namespace of the live Kubernetes cluster.
 
 No AI, no diagnosis logic, no Stack8s integration.
 
@@ -82,9 +82,69 @@ No AI, no diagnosis logic, no Stack8s integration.
 - No environment variable values are printed.
 - No passwords, tokens, certificates, or kubeconfig credentials are printed.
 
-### Namespace used
+### Namespace
 
-`default` — hardcoded for the MVP. Other namespaces are not queried.
+`default` — hardcoded for the MVP.
+
+### Edge cases handled
+
+| Scenario | Handling |
+|----------|----------|
+| No pods in namespace | Prints `No pods found in namespace: default` |
+| Pod not yet scheduled | Shows `<not yet scheduled>` for node name |
+| Pod pending, no container status | Shows spec image, `Ready: false`, `State: Pending` |
+| Container Running | Shows start time |
+| Container Waiting | Shows reason + message |
+| Container Terminated | Shows reason + exit code |
+| Multiple containers per pod | All containers iterated and printed |
+| Missing last termination info | Section omitted silently |
+
+---
+
+## Feature 3 — Kubernetes Events Collector
+
+### What Kubernetes Events are
+
+Kubernetes Events are structured records that the control plane and kubelet write when something significant happens to a workload — scheduling, image pulling, container starting, OOMKills, back-offs, etc. They are the first place to look when diagnosing why a pod is not working correctly.
+
+### Why Events are useful for diagnosis
+
+- They show the exact sequence of actions Kubernetes took for a pod.
+- They surface warnings (e.g. `BackOff`, `Failed`, `OOMKilled`) before a pod enters a crash loop.
+- They provide human-readable messages with timing — when the scheduler assigned the pod, when the image was pulled, when the container started.
+
+### Fields collected per event
+
+| # | Field | Source |
+|---|-------|--------|
+| 1 | Event reason | `event.Reason` |
+| 2 | Event type | `event.Type` (`Normal` / `Warning`) |
+| 3 | Event message | `event.Message` |
+| 4 | Involved object kind | `event.InvolvedObject.Kind` |
+| 5 | Involved object name | `event.InvolvedObject.Name` |
+| 6 | Namespace | `event.Namespace` |
+| 7 | First observed timestamp | `event.FirstTimestamp` |
+| 8 | Last observed timestamp | `event.LastTimestamp` |
+| 9 | Count | `event.Count` |
+| 10 | Source component | `event.Source.Component` |
+
+### How events are filtered
+
+Events are fetched using a Kubernetes API field selector:
+
+```
+involvedObject.name=<podName>,involvedObject.namespace=<namespace>,involvedObject.kind=Pod
+```
+
+This is the same strategy `kubectl describe pod` uses internally. Only events directly associated with the specific pod are returned — unrelated cluster events are not included.
+
+Events are sorted **chronologically** (oldest → newest) using `LastTimestamp`, falling back to `FirstTimestamp`.
+
+### Security note
+
+- **No Secret values are collected or printed.**
+- No credentials, tokens, or kubeconfig contents are printed.
+- Event messages from Kubernetes are passed through as-is (they never contain Secret data).
 
 ### How to run
 
@@ -92,82 +152,92 @@ No AI, no diagnosis logic, no Stack8s integration.
 go run main.go
 ```
 
-Feature 1 (nodes) and Feature 2 (pods) output together in a single run.
+All three features (nodes, pod status, events) run in a single invocation.
 
-### How to verify with kubectl
+### How to verify events with kubectl
 
 ```bash
-# Check what kubectl sees:
-kubectl get pods -n default -o wide
+# Quick view
+kubectl get events -n default --field-selector involvedObject.name=<pod-name> --sort-by='.lastTimestamp'
 
-# For per-container details:
+# Full detail
 kubectl describe pod <pod-name> -n default
 ```
 
-### Actual test result (Feature 2)
+### Actual test result (Feature 3)
 
-Test pod deployed:
-```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: test-nginx
-  namespace: default
-spec:
-  containers:
-  - name: nginx
-    image: nginx:1.27-alpine
-    ports:
-    - containerPort: 80
-EOF
+Pod tested: **`test-nginx`** (`nginx:1.27-alpine`) in `default` namespace.
+
+**Go program output:**
+```
+── Kubernetes Events for pod: test-nginx ────────────────────────
+
+    Event 1
+      Type      : Normal
+      Reason    : Scheduled
+      Message   : Successfully assigned default/test-nginx to docker-desktop
+      Object    : Pod/test-nginx
+      Source    : default-scheduler
+      Count     : 1
+      First Seen: 2026-09-30 11:58:50 UTC
+      Last Seen : 2026-09-30 11:58:50 UTC
+
+    Event 2
+      Type      : Normal
+      Reason    : Pulling
+      Message   : Pulling image "nginx:1.27-alpine"
+      Object    : Pod/test-nginx
+      Source    : kubelet
+      Count     : 1
+      First Seen: 2026-09-30 11:58:53 UTC
+      Last Seen : 2026-09-30 11:58:53 UTC
+
+    Event 3
+      Type      : Normal
+      Reason    : Pulled
+      Message   : Successfully pulled image "nginx:1.27-alpine" in 2.327s (2.328s including waiting). Image size: 20984244 bytes.
+      Object    : Pod/test-nginx
+      Source    : kubelet
+      Count     : 1
+      First Seen: 2026-09-30 11:58:55 UTC
+      Last Seen : 2026-09-30 11:58:55 UTC
+
+    Event 4
+      Type      : Normal
+      Reason    : Created
+      Message   : Created container nginx
+      Object    : Pod/test-nginx
+      Source    : kubelet
+      Count     : 1
+      First Seen: 2026-09-30 11:58:55 UTC
+      Last Seen : 2026-09-30 11:58:55 UTC
+
+    Event 5
+      Type      : Normal
+      Reason    : Started
+      Message   : Started container nginx
+      Object    : Pod/test-nginx
+      Source    : kubelet
+      Count     : 1
+      First Seen: 2026-09-30 11:58:56 UTC
+      Last Seen : 2026-09-30 11:58:56 UTC
 ```
 
-Program output:
+**kubectl reference output (verified match):**
 ```
-── Pod Status Collector (namespace: default) ──────────────────────────
-Pods found: 1
-
-[1/1] Pod: test-nginx
-    Namespace   : default
-    Phase       : Running
-    Created     : 2026-09-30 11:58:50 UTC
-    Node        : docker-desktop
-
-    Container   : nginx
-      Image     : nginx:1.27-alpine
-      Ready     : true
-      Restarts  : 0
-      State     : Running (started: 2026-09-30 11:58:56)
+LAST SEEN   TYPE     REASON      OBJECT           MESSAGE
+8m46s       Normal   Scheduled   pod/test-nginx   Successfully assigned default/test-nginx to docker-desktop
+8m43s       Normal   Pulling     pod/test-nginx   Pulling image "nginx:1.27-alpine"
+8m41s       Normal   Pulled      pod/test-nginx   Successfully pulled image "nginx:1.27-alpine" in 2.327s ...
+8m41s       Normal   Created     pod/test-nginx   Created container nginx
+8m40s       Normal   Started     pod/test-nginx   Started container nginx
 ```
 
-`kubectl get pods -n default` output (verified match):
-```
-NAME         READY   STATUS    RESTARTS   AGE   IP         NODE
-test-nginx   1/1     Running   0          80s   10.1.0.6   docker-desktop
-```
-
-All fields match. ✅
-
-### Edge cases handled
-
-| Scenario | Handling |
-|----------|----------|
-| No pods in namespace | Prints `No pods found in namespace: default` |
-| Pod pending / not yet scheduled | Shows `<not yet scheduled>` for node name |
-| Pod pending with no container status | Shows spec-level image, `Ready: false`, `State: Pending` |
-| Container in `Running` state | Shows start time |
-| Container in `Waiting` state | Shows reason + message |
-| Container in `Terminated` state | Shows reason + exit code |
-| Multiple containers per pod | All containers iterated and printed |
-| Missing last termination info | Section omitted silently |
-| kubeconfig not found | `ERROR:` message + exit 1 |
-| Cluster not reachable | `ERROR:` message + exit 1 |
-| API forbidden / namespace not found | `ERROR:` message + exit 1 |
+All 5 events matched. ✅
 
 ### Test pod
 
-The `test-nginx` pod is left running in the `default` namespace as a harmless test workload (nginx:1.27-alpine). To remove it:
+`test-nginx` (`nginx:1.27-alpine`) is left running in the `default` namespace as a harmless test workload. To remove it:
 
 ```bash
 kubectl delete pod test-nginx -n default

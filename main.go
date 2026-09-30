@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"text/tabwriter"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -100,7 +102,8 @@ func containerState(state corev1.ContainerState) string {
 	}
 }
 
-// collectPods retrieves all pods from the given namespace and prints their status.
+// collectPods retrieves all pods from the given namespace, prints their status,
+// and then calls collectEvents for each pod.
 // No Secret values, environment variables, passwords, tokens, or certificates are printed.
 func collectPods(clientset *kubernetes.Clientset, namespace string) {
 	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{})
@@ -138,42 +141,122 @@ func collectPods(clientset *kubernetes.Clientset, namespace string) {
 				fmt.Printf("      Ready     : false\n")
 				fmt.Printf("      State     : Pending (no status yet)\n")
 			}
-			continue
-		}
-
-		// Build a map: containerName → ContainerStatus for O(1) lookup
-		statusMap := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses))
-		for _, cs := range pod.Status.ContainerStatuses {
-			statusMap[cs.Name] = cs
-		}
-
-		for _, c := range pod.Spec.Containers {
-			fmt.Printf("\n    Container   : %s\n", c.Name)
-			fmt.Printf("      Image     : %s\n", c.Image)
-
-			cs, ok := statusMap[c.Name]
-			if !ok {
-				fmt.Printf("      Ready     : unknown\n")
-				fmt.Printf("      State     : no status available\n")
-				continue
+		} else {
+			// Build a map: containerName → ContainerStatus for O(1) lookup
+			statusMap := make(map[string]corev1.ContainerStatus, len(pod.Status.ContainerStatuses))
+			for _, cs := range pod.Status.ContainerStatuses {
+				statusMap[cs.Name] = cs
 			}
 
-			fmt.Printf("      Ready     : %v\n", cs.Ready)
-			fmt.Printf("      Restarts  : %d\n", cs.RestartCount)
-			fmt.Printf("      State     : %s\n", containerState(cs.State))
+			for _, c := range pod.Spec.Containers {
+				fmt.Printf("\n    Container   : %s\n", c.Name)
+				fmt.Printf("      Image     : %s\n", c.Image)
 
-			// Last termination info (if available)
-			if cs.LastTerminationState.Terminated != nil {
-				lt := cs.LastTerminationState.Terminated
-				reason := lt.Reason
-				if reason == "" {
-					reason = "Unknown"
+				cs, ok := statusMap[c.Name]
+				if !ok {
+					fmt.Printf("      Ready     : unknown\n")
+					fmt.Printf("      State     : no status available\n")
+					continue
 				}
-				fmt.Printf("      Last Term : reason=%s  exit=%d\n", reason, lt.ExitCode)
+
+				fmt.Printf("      Ready     : %v\n", cs.Ready)
+				fmt.Printf("      Restarts  : %d\n", cs.RestartCount)
+				fmt.Printf("      State     : %s\n", containerState(cs.State))
+
+				// Last termination info (if available)
+				if cs.LastTerminationState.Terminated != nil {
+					lt := cs.LastTerminationState.Terminated
+					reason := lt.Reason
+					if reason == "" {
+						reason = "Unknown"
+					}
+					fmt.Printf("      Last Term : reason=%s  exit=%d\n", reason, lt.ExitCode)
+				}
 			}
 		}
+
+		// Feature 3: collect and display Kubernetes Events for this pod
+		collectEvents(clientset, pod.Namespace, pod.Name)
 	}
 	fmt.Println()
+}
+
+// ── Feature 3: Kubernetes Events Collector ────────────────────────────────────
+
+// eventTimestamp returns the best available timestamp for sorting.
+// Prefers LastTimestamp; falls back to FirstTimestamp; zero time if neither set.
+func eventTimestamp(e corev1.Event) time.Time {
+	if !e.LastTimestamp.IsZero() {
+		return e.LastTimestamp.Time
+	}
+	if !e.FirstTimestamp.IsZero() {
+		return e.FirstTimestamp.Time
+	}
+	return time.Time{}
+}
+
+// collectEvents retrieves all Kubernetes Events for a specific pod (by name) in
+// the given namespace, then prints them in chronological order.
+//
+// Filtering uses the Kubernetes API field selector involvedObject.name=<podName>
+// so only events that directly reference the pod are returned — not unrelated
+// cluster-wide events. No Secret values, credentials or tokens are printed.
+func collectEvents(clientset *kubernetes.Clientset, namespace, podName string) {
+	fieldSelector := fmt.Sprintf(
+		"involvedObject.name=%s,involvedObject.namespace=%s,involvedObject.kind=Pod",
+		podName, namespace,
+	)
+
+	events, err := clientset.CoreV1().Events(namespace).List(context.TODO(), metav1.ListOptions{
+		FieldSelector: fieldSelector,
+	})
+	if err != nil {
+		// Non-fatal: report and continue so other output is not lost
+		fmt.Fprintf(os.Stderr, "  WARNING: failed to retrieve events for pod %q: %v\n", podName, err)
+		return
+	}
+
+	fmt.Printf("\n    ── Kubernetes Events for pod: %s ────────────────────────\n", podName)
+
+	if len(events.Items) == 0 {
+		fmt.Printf("    No events found for pod: %s\n", podName)
+		return
+	}
+
+	// Sort events chronologically (oldest → newest)
+	sorted := make([]corev1.Event, len(events.Items))
+	copy(sorted, events.Items)
+	sort.Slice(sorted, func(i, j int) bool {
+		return eventTimestamp(sorted[i]).Before(eventTimestamp(sorted[j]))
+	})
+
+	for idx, ev := range sorted {
+		fmt.Printf("\n    Event %d\n", idx+1)
+		fmt.Printf("      Type      : %s\n", ev.Type)
+		fmt.Printf("      Reason    : %s\n", ev.Reason)
+		fmt.Printf("      Message   : %s\n", ev.Message)
+
+		// Involved object
+		fmt.Printf("      Object    : %s/%s\n", ev.InvolvedObject.Kind, ev.InvolvedObject.Name)
+
+		// Source component (may be empty in newer Event API versions)
+		if ev.Source.Component != "" {
+			fmt.Printf("      Source    : %s\n", ev.Source.Component)
+		}
+
+		// Count
+		if ev.Count > 0 {
+			fmt.Printf("      Count     : %d\n", ev.Count)
+		}
+
+		// Timestamps — only print if non-zero
+		if !ev.FirstTimestamp.IsZero() {
+			fmt.Printf("      First Seen: %s\n", ev.FirstTimestamp.Format("2006-01-02 15:04:05 UTC"))
+		}
+		if !ev.LastTimestamp.IsZero() {
+			fmt.Printf("      Last Seen : %s\n", ev.LastTimestamp.Format("2006-01-02 15:04:05 UTC"))
+		}
+	}
 }
 
 // ── Entry Point ───────────────────────────────────────────────────────────────
@@ -185,5 +268,6 @@ func main() {
 	listNodes(clientset, config.Host)
 
 	// Feature 2: collect pod status from the default namespace
+	// Feature 3: collectEvents is called inside collectPods for each pod
 	collectPods(clientset, "default")
 }
