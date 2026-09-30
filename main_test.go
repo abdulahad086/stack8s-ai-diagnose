@@ -549,3 +549,168 @@ func TestBuildEvidencePackage_ServiceEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildEvidencePackage_StorageEvidence(t *testing.T) {
+	fake := provider.NewFakeProvider()
+	fake.NodesData = []provider.NodeInfo{{Name: "node-1", Status: "Ready"}}
+
+	// Setup StorageClass
+	fake.StorageClassesData["standard"] = provider.StorageClassInfo{
+		Name:              "standard",
+		Provisioner:       "docker.io/hostpath",
+		ReclaimPolicy:     "Delete",
+		VolumeBindingMode: "Immediate",
+	}
+
+	// Setup PVCs
+	fake.PVCsData["default"] = map[string]provider.PersistentVolumeClaimInfo{
+		"pvc-bound": {
+			Name:             "pvc-bound",
+			Namespace:        "default",
+			Phase:            "Bound",
+			StorageClassName: "standard",
+			VolumeName:       "pv-100",
+			RequestedStorage: "1Gi",
+			AccessModes:      []string{"ReadWriteOnce"},
+			VolumeMode:       "Filesystem",
+		},
+		"pvc-pending": {
+			Name:             "pvc-pending",
+			Namespace:        "default",
+			Phase:            "Pending",
+			StorageClassName: "non-existent-sc",
+			RequestedStorage: "5Gi",
+			AccessModes:      []string{"ReadWriteOnce"},
+			VolumeMode:       "Filesystem",
+		},
+	}
+	fake.PVsData["pv-100"] = provider.PersistentVolumeInfo{
+		Name:             "pv-100",
+		Phase:            "Bound",
+		Capacity:         "1Gi",
+		StorageClassName: "standard",
+		AccessModes:      []string{"ReadWriteOnce"},
+		VolumeMode:       "Filesystem",
+		ClaimRef:         "default/pvc-bound",
+		ReclaimPolicy:    "Delete",
+		PluginSource:     "hostPath",
+	}
+
+	// Setup Pods
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:   "pod-bound-pvc",
+			Namespace: "default",
+			NodeName:  "node-1",
+			Volumes: []provider.PodVolumeInfo{
+				{Name: "data", ClaimName: "pvc-bound", Type: "persistentVolumeClaim"},
+			},
+		},
+		{
+			PodName:   "pod-pending-pvc",
+			Namespace: "default",
+			NodeName:  "<not yet scheduled>",
+			Volumes: []provider.PodVolumeInfo{
+				{Name: "data", ClaimName: "pvc-pending", Type: "persistentVolumeClaim"},
+			},
+		},
+		{
+			PodName:   "pod-missing-pvc",
+			Namespace: "default",
+			NodeName:  "<not yet scheduled>",
+			Volumes: []provider.PodVolumeInfo{
+				{Name: "data", ClaimName: "pvc-missing", Type: "persistentVolumeClaim"},
+			},
+		},
+		{
+			PodName:   "pod-no-pvc",
+			Namespace: "default",
+			NodeName:  "node-1",
+			Volumes: []provider.PodVolumeInfo{
+				{Name: "tmp", Type: "emptyDir"},
+			},
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+	if len(pkg.Pods) != 4 {
+		t.Fatalf("expected 4 pods in evidence package, got %d", len(pkg.Pods))
+	}
+
+	// 1. Verify pod-bound-pvc
+	var boundStorageEv *StorageStatusData
+	for _, ev := range pkg.Pods[0].Evidence {
+		if ev.Source == SourceStorageStatus {
+			if ssd, ok := ev.Data.(StorageStatusData); ok {
+				boundStorageEv = &ssd
+			}
+		}
+	}
+	if boundStorageEv == nil || !boundStorageEv.PVCFound {
+		t.Fatalf("unexpected storage_status for pod-bound-pvc: %+v", boundStorageEv)
+	}
+	if len(boundStorageEv.PVCs) != 1 || boundStorageEv.PVCs[0].Phase != "Bound" || boundStorageEv.PVCs[0].VolumeName != "pv-100" {
+		t.Fatalf("unexpected PVCs for bound pod: %+v", boundStorageEv.PVCs)
+	}
+	if len(boundStorageEv.PVs) != 1 || boundStorageEv.PVs[0].Name != "pv-100" || boundStorageEv.PVs[0].Capacity != "1Gi" {
+		t.Fatalf("unexpected PVs for bound pod: %+v", boundStorageEv.PVs)
+	}
+	if len(boundStorageEv.StorageClasses) != 1 || boundStorageEv.StorageClasses[0].Name != "standard" {
+		t.Fatalf("unexpected StorageClasses for bound pod: %+v", boundStorageEv.StorageClasses)
+	}
+
+	// 2. Verify pod-pending-pvc
+	var pendingStorageEv *StorageStatusData
+	for _, ev := range pkg.Pods[1].Evidence {
+		if ev.Source == SourceStorageStatus {
+			if ssd, ok := ev.Data.(StorageStatusData); ok {
+				pendingStorageEv = &ssd
+			}
+		}
+	}
+	if pendingStorageEv == nil || !pendingStorageEv.PVCFound {
+		t.Fatalf("unexpected storage_status for pod-pending-pvc: %+v", pendingStorageEv)
+	}
+	if len(pendingStorageEv.PVCs) != 1 || pendingStorageEv.PVCs[0].Phase != "Pending" {
+		t.Fatalf("unexpected PVC phase: %+v", pendingStorageEv.PVCs)
+	}
+	if len(pendingStorageEv.PVs) != 0 {
+		t.Fatalf("expected 0 PVs for pending PVC, got %d", len(pendingStorageEv.PVs))
+	}
+
+	// 3. Verify pod-missing-pvc
+	var missingStorageEv *StorageStatusData
+	for _, ev := range pkg.Pods[2].Evidence {
+		if ev.Source == SourceStorageStatus {
+			if ssd, ok := ev.Data.(StorageStatusData); ok {
+				missingStorageEv = &ssd
+			}
+		}
+	}
+	if missingStorageEv == nil || !missingStorageEv.PVCFound {
+		t.Fatalf("expected PVCFound=true for missing PVC pod, got %+v", missingStorageEv)
+	}
+	if len(missingStorageEv.PVCs) != 1 || missingStorageEv.PVCs[0].Phase != "NotFound" || !missingStorageEv.PVCs[0].Unavailable {
+		t.Fatalf("expected PVC with Phase=NotFound and Unavailable=true, got %+v", missingStorageEv.PVCs)
+	}
+	if len(missingStorageEv.Volumes) != 1 || missingStorageEv.Volumes[0].ClaimName != "pvc-missing" {
+		t.Fatalf("unexpected volumes for missing PVC pod: %+v", missingStorageEv.Volumes)
+	}
+
+	// 4. Verify pod-no-pvc
+	var noPvcStorageEv *StorageStatusData
+	for _, ev := range pkg.Pods[3].Evidence {
+		if ev.Source == SourceStorageStatus {
+			if ssd, ok := ev.Data.(StorageStatusData); ok {
+				noPvcStorageEv = &ssd
+			}
+		}
+	}
+	if noPvcStorageEv == nil || noPvcStorageEv.PVCFound {
+		t.Fatalf("expected PVCFound=false for pod without PVC, got %+v", noPvcStorageEv)
+	}
+	if len(noPvcStorageEv.Volumes) != 1 || noPvcStorageEv.Volumes[0].Type != "emptyDir" {
+		t.Fatalf("unexpected volumes for pod-no-pvc: %+v", noPvcStorageEv)
+	}
+}
+
+

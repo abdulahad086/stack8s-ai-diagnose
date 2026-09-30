@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -366,6 +367,30 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			containers = append(containers, ci)
 		}
 
+		var volumes []PodVolumeInfo
+		for _, v := range pod.Spec.Volumes {
+			volInfo := PodVolumeInfo{Name: v.Name}
+			switch {
+			case v.PersistentVolumeClaim != nil:
+				volInfo.Type = "persistentVolumeClaim"
+				volInfo.ClaimName = v.PersistentVolumeClaim.ClaimName
+				volInfo.ReadOnly = v.PersistentVolumeClaim.ReadOnly
+			case v.EmptyDir != nil:
+				volInfo.Type = "emptyDir"
+			case v.ConfigMap != nil:
+				volInfo.Type = "configMap"
+			case v.Secret != nil:
+				volInfo.Type = "secret"
+			case v.HostPath != nil:
+				volInfo.Type = "hostPath"
+			case v.Projected != nil:
+				volInfo.Type = "projected"
+			default:
+				volInfo.Type = "other"
+			}
+			volumes = append(volumes, volInfo)
+		}
+
 		result = append(result, PodInfo{
 			PodName:    pod.Name,
 			Namespace:  pod.Namespace,
@@ -374,10 +399,197 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			PodIP:      pod.Status.PodIP,
 			Labels:     pod.Labels,
 			CreatedAt:  pod.CreationTimestamp.Format(time.RFC3339),
+			Volumes:    volumes,
 			Containers: containers,
 		})
 	}
 
+	return result, nil
+}
+
+func accessModesToStrings(modes []corev1.PersistentVolumeAccessMode) []string {
+	res := make([]string, 0, len(modes))
+	for _, m := range modes {
+		res = append(res, string(m))
+	}
+	return res
+}
+
+func mapPVCInfo(pvc corev1.PersistentVolumeClaim) PersistentVolumeClaimInfo {
+	scName := ""
+	if pvc.Spec.StorageClassName != nil {
+		scName = *pvc.Spec.StorageClassName
+	}
+
+	reqStorage := ""
+	if qty, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+		reqStorage = qty.String()
+	}
+
+	volMode := ""
+	if pvc.Spec.VolumeMode != nil {
+		volMode = string(*pvc.Spec.VolumeMode)
+	}
+
+	var createdAt string
+	if !pvc.CreationTimestamp.IsZero() {
+		createdAt = pvc.CreationTimestamp.Format(time.RFC3339)
+	}
+
+	return PersistentVolumeClaimInfo{
+		Name:             pvc.Name,
+		Namespace:        pvc.Namespace,
+		Phase:            string(pvc.Status.Phase),
+		StorageClassName: scName,
+		VolumeName:       pvc.Spec.VolumeName,
+		RequestedStorage: reqStorage,
+		AccessModes:      accessModesToStrings(pvc.Spec.AccessModes),
+		VolumeMode:       volMode,
+		CreatedAt:        createdAt,
+	}
+}
+
+func mapPVInfo(pv corev1.PersistentVolume) PersistentVolumeInfo {
+	scName := pv.Spec.StorageClassName
+
+	capStorage := ""
+	if qty, ok := pv.Spec.Capacity[corev1.ResourceStorage]; ok {
+		capStorage = qty.String()
+	}
+
+	volMode := ""
+	if pv.Spec.VolumeMode != nil {
+		volMode = string(*pv.Spec.VolumeMode)
+	}
+
+	claimRef := ""
+	if pv.Spec.ClaimRef != nil {
+		claimRef = fmt.Sprintf("%s/%s", pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name)
+	}
+
+	pluginSource := "other"
+	switch {
+	case pv.Spec.HostPath != nil:
+		pluginSource = "hostPath"
+	case pv.Spec.CSI != nil:
+		pluginSource = "csi"
+	case pv.Spec.Local != nil:
+		pluginSource = "local"
+	case pv.Spec.NFS != nil:
+		pluginSource = "nfs"
+	}
+
+	return PersistentVolumeInfo{
+		Name:             pv.Name,
+		Phase:            string(pv.Status.Phase),
+		Capacity:         capStorage,
+		StorageClassName: scName,
+		AccessModes:      accessModesToStrings(pv.Spec.AccessModes),
+		VolumeMode:       volMode,
+		ClaimRef:         claimRef,
+		ReclaimPolicy:    string(pv.Spec.PersistentVolumeReclaimPolicy),
+		PluginSource:     pluginSource,
+	}
+}
+
+func mapStorageClassInfo(sc storagev1.StorageClass) StorageClassInfo {
+	reclaimPolicy := ""
+	if sc.ReclaimPolicy != nil {
+		reclaimPolicy = string(*sc.ReclaimPolicy)
+	}
+
+	bindingMode := ""
+	if sc.VolumeBindingMode != nil {
+		bindingMode = string(*sc.VolumeBindingMode)
+	}
+
+	allowExpansion := false
+	if sc.AllowVolumeExpansion != nil {
+		allowExpansion = *sc.AllowVolumeExpansion
+	}
+
+	isDefault := false
+	if sc.Annotations != nil {
+		if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" ||
+			sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true" {
+			isDefault = true
+		}
+	}
+
+	return StorageClassInfo{
+		Name:                 sc.Name,
+		Provisioner:          sc.Provisioner,
+		ReclaimPolicy:        reclaimPolicy,
+		VolumeBindingMode:    bindingMode,
+		AllowVolumeExpansion: allowExpansion,
+		IsDefault:            isDefault,
+	}
+}
+
+// GetPersistentVolumeClaim returns detailed information for a PVC in a namespace.
+func (p *LocalKubernetesProvider) GetPersistentVolumeClaim(ctx context.Context, namespace, name string) (PersistentVolumeClaimInfo, error) {
+	pvc, err := p.clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return PersistentVolumeClaimInfo{
+			Name:        name,
+			Namespace:   namespace,
+			Phase:       "NotFound",
+			Unavailable: true,
+			Reason:      err.Error(),
+		}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("pvc %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	return mapPVCInfo(*pvc), nil
+}
+
+// GetPersistentVolume returns detailed information for a PV by name.
+func (p *LocalKubernetesProvider) GetPersistentVolume(ctx context.Context, name string) (PersistentVolumeInfo, error) {
+	pv, err := p.clientset.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return PersistentVolumeInfo{
+			Name:  name,
+			Phase: "NotFound",
+		}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("pv %q not found", name),
+			Err:     err,
+		}
+	}
+	return mapPVInfo(*pv), nil
+}
+
+// GetStorageClass returns detailed information for a StorageClass by name.
+func (p *LocalKubernetesProvider) GetStorageClass(ctx context.Context, name string) (StorageClassInfo, error) {
+	sc, err := p.clientset.StorageV1().StorageClasses().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return StorageClassInfo{
+			Name: name,
+		}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("storage class %q not found", name),
+			Err:     err,
+		}
+	}
+	return mapStorageClassInfo(*sc), nil
+}
+
+// GetStorageClasses lists all StorageClasses in the cluster.
+func (p *LocalKubernetesProvider) GetStorageClasses(ctx context.Context) ([]StorageClassInfo, error) {
+	scs, err := p.clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeCollectionFailed,
+			Message: "failed to list storage classes",
+			Err:     err,
+		}
+	}
+	result := make([]StorageClassInfo, 0, len(scs.Items))
+	for _, sc := range scs.Items {
+		result = append(result, mapStorageClassInfo(sc))
+	}
 	return result, nil
 }
 

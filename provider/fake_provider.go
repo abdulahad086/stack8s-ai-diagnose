@@ -8,23 +8,29 @@ import (
 // FakeProvider is an in-memory InfrastructureProvider used for unit testing
 // evidence collection, data mapping, and diagnosis boundaries without a live cluster.
 type FakeProvider struct {
-	ClusterName  string
-	NodesData    []NodeInfo
-	GPUNodesData map[string]NodeGPUResources // nodeName -> NodeGPUResources
-	PodsData     map[string][]PodInfo        // namespace -> []PodInfo
-	ServicesData map[string][]ServiceInfo    // namespace -> []ServiceInfo
-	EventsData   map[string][]EventInfo      // podName -> []EventInfo
-	LogsData     map[string]ContainerLogInfo // podName/container -> ContainerLogInfo
+	ClusterName       string
+	NodesData         []NodeInfo
+	GPUNodesData      map[string]NodeGPUResources       // nodeName -> NodeGPUResources
+	PodsData          map[string][]PodInfo              // namespace -> []PodInfo
+	ServicesData      map[string][]ServiceInfo          // namespace -> []ServiceInfo
+	PVCsData          map[string]map[string]PersistentVolumeClaimInfo // namespace -> name -> PVC
+	PVsData           map[string]PersistentVolumeInfo   // name -> PV
+	StorageClassesData map[string]StorageClassInfo       // name -> StorageClass
+	EventsData        map[string][]EventInfo            // podName -> []EventInfo
+	LogsData          map[string]ContainerLogInfo       // podName/container -> ContainerLogInfo
 }
 
 func NewFakeProvider() *FakeProvider {
 	return &FakeProvider{
-		ClusterName:  "https://fake.cluster.local:6443",
-		GPUNodesData: make(map[string]NodeGPUResources),
-		PodsData:     make(map[string][]PodInfo),
-		ServicesData: make(map[string][]ServiceInfo),
-		EventsData:   make(map[string][]EventInfo),
-		LogsData:     make(map[string]ContainerLogInfo),
+		ClusterName:        "https://fake.cluster.local:6443",
+		GPUNodesData:       make(map[string]NodeGPUResources),
+		PodsData:           make(map[string][]PodInfo),
+		ServicesData:       make(map[string][]ServiceInfo),
+		PVCsData:           make(map[string]map[string]PersistentVolumeClaimInfo),
+		PVsData:            make(map[string]PersistentVolumeInfo),
+		StorageClassesData: make(map[string]StorageClassInfo),
+		EventsData:         make(map[string][]EventInfo),
+		LogsData:           make(map[string]ContainerLogInfo),
 	}
 }
 
@@ -108,6 +114,57 @@ func (f *FakeProvider) GetService(ctx context.Context, namespace, name string) (
 		Code:    ErrCodeResourceNotFound,
 		Message: fmt.Sprintf("service %q not found in namespace %q", name, namespace),
 	}
+}
+
+func (f *FakeProvider) GetPersistentVolumeClaim(ctx context.Context, namespace, name string) (PersistentVolumeClaimInfo, error) {
+	if nsMap, ok := f.PVCsData[namespace]; ok {
+		if pvc, ok := nsMap[name]; ok {
+			return pvc, nil
+		}
+	}
+	return PersistentVolumeClaimInfo{
+		Name:        name,
+		Namespace:   namespace,
+		Phase:       "NotFound",
+		Unavailable: true,
+		Reason:      fmt.Sprintf("pvc %q not found in namespace %q", name, namespace),
+	}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("pvc %q not found in namespace %q", name, namespace),
+	}
+}
+
+func (f *FakeProvider) GetPersistentVolume(ctx context.Context, name string) (PersistentVolumeInfo, error) {
+	if pv, ok := f.PVsData[name]; ok {
+		return pv, nil
+	}
+	return PersistentVolumeInfo{
+		Name:  name,
+		Phase: "NotFound",
+	}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("pv %q not found", name),
+	}
+}
+
+func (f *FakeProvider) GetStorageClass(ctx context.Context, name string) (StorageClassInfo, error) {
+	if sc, ok := f.StorageClassesData[name]; ok {
+		return sc, nil
+	}
+	return StorageClassInfo{
+		Name: name,
+	}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("storage class %q not found", name),
+	}
+}
+
+func (f *FakeProvider) GetStorageClasses(ctx context.Context) ([]StorageClassInfo, error) {
+	result := make([]StorageClassInfo, 0, len(f.StorageClassesData))
+	for _, sc := range f.StorageClassesData {
+		result = append(result, sc)
+	}
+	return result, nil
 }
 
 func (f *FakeProvider) GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error) {

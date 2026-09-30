@@ -56,6 +56,22 @@ func (s *Stack8sProvider) GetService(ctx context.Context, namespace, name string
 	return ServiceInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }
 
+func (s *Stack8sProvider) GetPersistentVolumeClaim(ctx context.Context, namespace, name string) (PersistentVolumeClaimInfo, error) {
+	return PersistentVolumeClaimInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetPersistentVolume(ctx context.Context, name string) (PersistentVolumeInfo, error) {
+	return PersistentVolumeInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetStorageClass(ctx context.Context, name string) (StorageClassInfo, error) {
+	return StorageClassInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetStorageClasses(ctx context.Context) ([]StorageClassInfo, error) {
+	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
 func (s *Stack8sProvider) GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error) {
 	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }

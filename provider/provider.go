@@ -84,7 +84,15 @@ type ContainerInfo struct {
 	GPULimit      string `json:"gpu_limit,omitempty"`
 }
 
-// PodInfo represents the status, networking, and containers of a single pod.
+// PodVolumeInfo represents a volume declared in a Pod specification.
+type PodVolumeInfo struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`                 // e.g. "persistentVolumeClaim", "emptyDir", "configMap", "secret", "hostPath", "other"
+	ClaimName string `json:"claim_name,omitempty"` // PVC name if Type is "persistentVolumeClaim"
+	ReadOnly  bool   `json:"read_only,omitempty"`
+}
+
+// PodInfo represents the status, networking, storage volumes, and containers of a single pod.
 type PodInfo struct {
 	PodName    string            `json:"pod_name"`
 	Namespace  string            `json:"namespace"`
@@ -93,7 +101,48 @@ type PodInfo struct {
 	PodIP      string            `json:"pod_ip,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
 	CreatedAt  string            `json:"created_at"`
+	Volumes    []PodVolumeInfo   `json:"volumes,omitempty"`
 	Containers []ContainerInfo   `json:"containers"`
+}
+
+// ── Storage Domain Types (Feature 13) ────────────────────────────────────────
+
+// PersistentVolumeClaimInfo represents a Kubernetes PersistentVolumeClaim (PVC).
+type PersistentVolumeClaimInfo struct {
+	Name             string   `json:"name"`
+	Namespace        string   `json:"namespace"`
+	Phase            string   `json:"phase"`                       // "Bound", "Pending", "Lost", "NotFound"
+	StorageClassName string   `json:"storage_class,omitempty"`
+	VolumeName       string   `json:"volume_name,omitempty"`       // Bound PV name
+	RequestedStorage string   `json:"requested_storage,omitempty"` // e.g. "1Gi"
+	AccessModes      []string `json:"access_modes,omitempty"`      // e.g. ["ReadWriteOnce"]
+	VolumeMode       string   `json:"volume_mode,omitempty"`       // e.g. "Filesystem"
+	CreatedAt        string   `json:"created_at,omitempty"`
+	Unavailable      bool     `json:"unavailable,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
+}
+
+// PersistentVolumeInfo represents a Kubernetes PersistentVolume (PV).
+type PersistentVolumeInfo struct {
+	Name             string   `json:"name"`
+	Phase            string   `json:"phase"`                       // "Bound", "Available", "Released", "Failed"
+	Capacity         string   `json:"capacity,omitempty"`          // e.g. "1Gi"
+	StorageClassName string   `json:"storage_class,omitempty"`
+	AccessModes      []string `json:"access_modes,omitempty"`      // e.g. ["ReadWriteOnce"]
+	VolumeMode       string   `json:"volume_mode,omitempty"`       // e.g. "Filesystem"
+	ClaimRef         string   `json:"claim_ref,omitempty"`         // e.g. "default/my-data"
+	ReclaimPolicy    string   `json:"reclaim_policy,omitempty"`    // e.g. "Delete", "Retain"
+	PluginSource     string   `json:"plugin_source,omitempty"`     // e.g. "hostPath", "csi", "local"
+}
+
+// StorageClassInfo represents a Kubernetes StorageClass.
+type StorageClassInfo struct {
+	Name                 string `json:"name"`
+	Provisioner          string `json:"provisioner"`
+	ReclaimPolicy        string `json:"reclaim_policy,omitempty"`        // e.g. "Delete", "Retain"
+	VolumeBindingMode    string `json:"volume_binding_mode,omitempty"`   // e.g. "Immediate", "WaitForFirstConsumer"
+	AllowVolumeExpansion bool   `json:"allow_volume_expansion,omitempty"`
+	IsDefault            bool   `json:"is_default,omitempty"`
 }
 
 // ── Network & Service Domain Types (Feature 12) ─────────────────────────────
@@ -226,6 +275,18 @@ type InfrastructureProvider interface {
 
 	// GetService returns detailed information for a specific service by name.
 	GetService(ctx context.Context, namespace, name string) (ServiceInfo, error)
+
+	// GetPersistentVolumeClaim returns detailed information for a PVC in a namespace.
+	GetPersistentVolumeClaim(ctx context.Context, namespace, name string) (PersistentVolumeClaimInfo, error)
+
+	// GetPersistentVolume returns detailed information for a PV by name.
+	GetPersistentVolume(ctx context.Context, name string) (PersistentVolumeInfo, error)
+
+	// GetStorageClass returns detailed information for a StorageClass by name.
+	GetStorageClass(ctx context.Context, name string) (StorageClassInfo, error)
+
+	// GetStorageClasses lists all StorageClasses in the cluster.
+	GetStorageClasses(ctx context.Context) ([]StorageClassInfo, error)
 
 	// GetPodEvents lists all events for a specific pod.
 	GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error)

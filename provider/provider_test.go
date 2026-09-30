@@ -235,3 +235,85 @@ func TestFakeProviderServices(t *testing.T) {
 		t.Fatalf("expected error for non-existent service")
 	}
 }
+
+func TestFakeProviderStorage(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	fake.PVCsData["default"] = map[string]PersistentVolumeClaimInfo{
+		"bound-pvc": {
+			Name:             "bound-pvc",
+			Namespace:        "default",
+			Phase:            "Bound",
+			StorageClassName: "hostpath",
+			VolumeName:       "pv-123",
+			RequestedStorage: "1Gi",
+			AccessModes:      []string{"ReadWriteOnce"},
+			VolumeMode:       "Filesystem",
+		},
+		"pending-pvc": {
+			Name:             "pending-pvc",
+			Namespace:        "default",
+			Phase:            "Pending",
+			StorageClassName: "non-existent-sc",
+			RequestedStorage: "5Gi",
+			AccessModes:      []string{"ReadWriteOnce"},
+			VolumeMode:       "Filesystem",
+		},
+	}
+
+	fake.PVsData["pv-123"] = PersistentVolumeInfo{
+		Name:             "pv-123",
+		Phase:            "Bound",
+		Capacity:         "1Gi",
+		StorageClassName: "hostpath",
+		AccessModes:      []string{"ReadWriteOnce"},
+		VolumeMode:       "Filesystem",
+		ClaimRef:         "default/bound-pvc",
+		ReclaimPolicy:    "Delete",
+		PluginSource:     "hostPath",
+	}
+
+	fake.StorageClassesData["hostpath"] = StorageClassInfo{
+		Name:              "hostpath",
+		Provisioner:       "docker.io/hostpath",
+		ReclaimPolicy:     "Delete",
+		VolumeBindingMode: "Immediate",
+		IsDefault:         true,
+	}
+
+	// 1. GetPersistentVolumeClaim - Bound
+	pvc, err := fake.GetPersistentVolumeClaim(ctx, "default", "bound-pvc")
+	if err != nil || pvc.Phase != "Bound" || pvc.VolumeName != "pv-123" || pvc.RequestedStorage != "1Gi" {
+		t.Fatalf("unexpected PVC result: %+v, err: %v", pvc, err)
+	}
+
+	// 2. GetPersistentVolumeClaim - Pending
+	pendingPvc, err := fake.GetPersistentVolumeClaim(ctx, "default", "pending-pvc")
+	if err != nil || pendingPvc.Phase != "Pending" || pendingPvc.VolumeName != "" {
+		t.Fatalf("unexpected Pending PVC result: %+v, err: %v", pendingPvc, err)
+	}
+
+	// 3. GetPersistentVolumeClaim - Missing
+	missingPvc, err := fake.GetPersistentVolumeClaim(ctx, "default", "missing-pvc")
+	if err == nil || missingPvc.Phase != "NotFound" || !missingPvc.Unavailable {
+		t.Fatalf("expected NotFound for missing PVC, got: %+v", missingPvc)
+	}
+
+	// 4. GetPersistentVolume
+	pv, err := fake.GetPersistentVolume(ctx, "pv-123")
+	if err != nil || pv.Phase != "Bound" || pv.Capacity != "1Gi" || pv.PluginSource != "hostPath" {
+		t.Fatalf("unexpected PV result: %+v, err: %v", pv, err)
+	}
+
+	// 5. GetStorageClass & List
+	sc, err := fake.GetStorageClass(ctx, "hostpath")
+	if err != nil || sc.Provisioner != "docker.io/hostpath" || !sc.IsDefault {
+		t.Fatalf("unexpected SC result: %+v, err: %v", sc, err)
+	}
+
+	scs, err := fake.GetStorageClasses(ctx)
+	if err != nil || len(scs) != 1 || scs[0].Name != "hostpath" {
+		t.Fatalf("unexpected GetStorageClasses result: %v, err: %v", scs, err)
+	}
+}

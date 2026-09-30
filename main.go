@@ -197,6 +197,7 @@ const (
 	SourceNodeStatus      EvidenceSource = "node_status"
 	SourceGPUStatus       EvidenceSource = "gpu_status"
 	SourceServiceStatus   EvidenceSource = "service_status"
+	SourceStorageStatus   EvidenceSource = "storage_status"
 )
 
 type ContainerEvidenceData struct {
@@ -224,6 +225,7 @@ type PodStatusData struct {
 	PodIP      string                  `json:"pod_ip,omitempty"`
 	Labels     map[string]string       `json:"labels,omitempty"`
 	CreatedAt  string                  `json:"created_at"`
+	Volumes    []provider.PodVolumeInfo `json:"volumes,omitempty"`
 	Containers []ContainerEvidenceData `json:"containers"`
 }
 
@@ -265,6 +267,17 @@ type ServiceStatusData struct {
 	PodInEndpoints   bool                         `json:"pod_in_endpoints"`
 	PodEndpointReady bool                         `json:"pod_endpoint_ready"`
 	Reason           string                       `json:"reason,omitempty"`
+}
+
+type StorageStatusData struct {
+	PodName        string                               `json:"pod_name"`
+	Namespace      string                               `json:"namespace"`
+	PVCFound       bool                                 `json:"pvc_found"`
+	Volumes        []provider.PodVolumeInfo             `json:"volumes,omitempty"`
+	PVCs           []provider.PersistentVolumeClaimInfo `json:"pvcs,omitempty"`
+	PVs            []provider.PersistentVolumeInfo      `json:"pvs,omitempty"`
+	StorageClasses []provider.StorageClassInfo          `json:"storage_classes,omitempty"`
+	Reason         string                               `json:"reason,omitempty"`
 }
 
 type KubernetesEventData struct {
@@ -386,6 +399,7 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 			PodIP:      pod.PodIP,
 			Labels:     pod.Labels,
 			CreatedAt:  pod.CreatedAt,
+			Volumes:    pod.Volumes,
 			Containers: containers,
 		}
 		podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
@@ -533,6 +547,78 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 					ServiceFound:    false,
 					SelectorMatched: false,
 					Reason:          "no Kubernetes Service selector matches this pod's labels",
+				},
+			})
+		}
+
+		// ── E_storage-type: storage_status (Feature 13) ───────────────────
+		var pvcVolumes []provider.PodVolumeInfo
+		for _, v := range pod.Volumes {
+			if v.Type == "persistentVolumeClaim" && v.ClaimName != "" {
+				pvcVolumes = append(pvcVolumes, v)
+			}
+		}
+
+		if len(pvcVolumes) > 0 {
+			var pvcs []provider.PersistentVolumeClaimInfo
+			var pvs []provider.PersistentVolumeInfo
+			var scs []provider.StorageClassInfo
+			scSeen := make(map[string]bool)
+
+			for _, v := range pvcVolumes {
+				pvcInfo, err := prov.GetPersistentVolumeClaim(context.TODO(), pod.Namespace, v.ClaimName)
+				if err != nil {
+					pvcs = append(pvcs, provider.PersistentVolumeClaimInfo{
+						Name:        v.ClaimName,
+						Namespace:   pod.Namespace,
+						Phase:       "NotFound",
+						Unavailable: true,
+						Reason:      err.Error(),
+					})
+				} else {
+					pvcs = append(pvcs, pvcInfo)
+					if pvcInfo.VolumeName != "" {
+						pvInfo, err := prov.GetPersistentVolume(context.TODO(), pvcInfo.VolumeName)
+						if err == nil {
+							pvs = append(pvs, pvInfo)
+						}
+					}
+					if pvcInfo.StorageClassName != "" && !scSeen[pvcInfo.StorageClassName] {
+						scSeen[pvcInfo.StorageClassName] = true
+						scInfo, err := prov.GetStorageClass(context.TODO(), pvcInfo.StorageClassName)
+						if err == nil {
+							scs = append(scs, scInfo)
+						}
+					}
+				}
+			}
+
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceStorageStatus,
+				Data: StorageStatusData{
+					PodName:        pod.PodName,
+					Namespace:      pod.Namespace,
+					PVCFound:       true,
+					Volumes:        pod.Volumes,
+					PVCs:           pvcs,
+					PVs:            pvs,
+					StorageClasses: scs,
+				},
+			})
+		} else {
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceStorageStatus,
+				Data: StorageStatusData{
+					PodName:        pod.PodName,
+					Namespace:      pod.Namespace,
+					PVCFound:       false,
+					Volumes:        pod.Volumes,
+					PVCs:           []provider.PersistentVolumeClaimInfo{},
+					PVs:            []provider.PersistentVolumeInfo{},
+					StorageClasses: []provider.StorageClassInfo{},
+					Reason:         "pod does not reference any PersistentVolumeClaim",
 				},
 			})
 		}

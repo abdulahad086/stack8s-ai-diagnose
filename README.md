@@ -771,6 +771,65 @@ Service evidence is attached to the `EvidencePackage` as `service_status` eviden
 3. Verified `test-logger` (no matching selector) produced `service_found: false`.
 4. Deleted temporary test service cleanly.
 
+---
+
+## Feature 13 — Storage Evidence Collector
+
+> **"Feature 13 reports Kubernetes storage configuration and state. It does not by itself prove end-to-end storage health or successful application-level I/O."**
+
+### Purpose & Scope
+
+Feature 13 extends the provider abstraction and unified evidence package to inspect Kubernetes PersistentVolumeClaims (PVC), PersistentVolumes (PV), StorageClasses, and Pod volume declarations for target workloads.
+
+### Extended Provider Interface & Types
+
+Added to `provider.InfrastructureProvider`:
+- `GetPersistentVolumeClaims(ctx, namespace) ([]PersistentVolumeClaimInfo, error)`
+- `GetPersistentVolumeClaim(ctx, namespace, name) (PersistentVolumeClaimInfo, error)`
+- `GetPersistentVolume(ctx, name) (PersistentVolumeInfo, error)`
+- `GetStorageClasses(ctx) ([]StorageClassInfo, error)`
+- `GetStorageClass(ctx, name) (StorageClassInfo, error)`
+
+Domain Types:
+- `PersistentVolumeClaimInfo`: `Name`, `Namespace`, `Phase` (`Bound`, `Pending`, `Lost`, `NotFound`), `StorageClassName`, `VolumeName`, `RequestedStorage`, `AccessModes`, `VolumeMode`, `CreatedAt`, `Unavailable`, `Reason`.
+- `PersistentVolumeInfo`: `Name`, `Phase`, `Capacity`, `StorageClassName`, `AccessModes`, `VolumeMode`, `ClaimRef`, `ReclaimPolicy`, `PluginSource`, `CSIDriverName`.
+- `StorageClassInfo`: `Name`, `Provisioner`, `ReclaimPolicy`, `VolumeBindingMode`, `AllowVolumeExpansion`, `IsDefault`.
+- `PodVolumeInfo`: `Name`, `Type` (`persistentVolumeClaim`, `emptyDir`, `configMap`, `secret`, `hostPath`, `projected`, `other`), `ClaimName`, `ReadOnly`.
+- `PodInfo`: Updated with `Volumes []PodVolumeInfo`.
+
+### Relationship Mapping & Storage Quantities
+
+- **Pod → PVC → PV → StorageClass Chain:** Maintains exact relationships from Pod volume declarations down to the bound PV and backing StorageClass.
+- **Storage Quantities:** Preserves exact Kubernetes quantity strings (e.g. `10Mi`, `1Gi`, `500Mi`) without floating-point arithmetic or ambiguous string truncation (e.g., never truncates `"10Mi"` to `"10"`).
+- **Volume Type Parsing:** Correctly distinguishes `persistentVolumeClaim`, `emptyDir`, `configMap`, `secret`, `hostPath`, and `projected` volume types.
+
+### Evidence Package Integration (`storage_status`)
+
+Storage evidence is attached to the `EvidencePackage` as `storage_status` evidence items for each pod:
+
+- **Pods referencing Bound PVC:** Includes PVC phase (`Bound`), requested storage, access modes, volume mode, bound PV info, and backing StorageClass metadata.
+- **Pods referencing Pending PVC:** Reports PVC phase (`Pending`), requested storage, and StorageClass. PV list is strictly empty (`[]`) — no fake PV is ever invented.
+- **Pods referencing Missing PVC:** Captures PVC phase `NotFound` with `unavailable: true` and the exact error reason from Kubernetes.
+- **Pods without PVC:** Sets `pvc_found: false` and records reason `"pod does not reference any PersistentVolumeClaim"`.
+
+### Controlled Cluster Verification
+
+1. **Bound PVC Test:** Created `test-storage-pvc` (10Mi, `hostpath`) and `test-storage-pod`. Verified `storage_status` evidence matched `kubectl`:
+   - PVC: `test-storage-pvc`, Phase: `Bound`, StorageClass: `hostpath`, PV: `pvc-c502901f-3c3e-4617-a3d5-593306c6e3d4`
+   - PV: `pvc-c502901f-3c3e-4617-a3d5-593306c6e3d4`, Capacity: `10Mi`, ClaimRef: `default/test-storage-pvc`
+   - StorageClass: `hostpath`, Provisioner: `docker.io/hostpath`, BindingMode: `Immediate`
+2. **Pending PVC Test:** Created `test-pending-pvc` (5Gi, `non-existent-sc`) and `test-pending-storage-pod`. Verified `storage_status` evidence matched `kubectl`:
+   - PVC: `test-pending-pvc`, Phase: `Pending`, StorageClass: `non-existent-sc`
+   - PV: `[]` (0 PVs, honest representation)
+   - Kubernetes Event: Captured `ProvisioningFailed` / `FailedScheduling` events.
+3. **Missing PVC Test:** Created `test-missing-storage-pod` referencing `pvc-missing-12345`. Verified `storage_status` evidence matched `kubectl`:
+   - PVC: `pvc-missing-12345`, Phase: `NotFound`, `unavailable: true`
+   - Kubernetes Event: Captured `FailedScheduling` event indicating PVC missing.
+4. **Pod without PVC Test:** Verified `test-nginx` and `test-logger` reported `pvc_found: false`.
+5. **Cleanup:** All temporary test PVCs and test Pods were deleted cleanly.
+
+---
+
 
 
 
