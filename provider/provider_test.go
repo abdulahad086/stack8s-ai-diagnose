@@ -317,3 +317,119 @@ func TestFakeProviderStorage(t *testing.T) {
 		t.Fatalf("unexpected GetStorageClasses result: %v, err: %v", scs, err)
 	}
 }
+
+func TestFakeProviderWorkloads(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	fake.DeploymentsData["default"] = map[string]DeploymentInfo{
+		"web-app": {
+			Name:              "web-app",
+			Namespace:         "default",
+			DesiredReplicas:   3,
+			CurrentReplicas:   3,
+			ReadyReplicas:     3,
+			AvailableReplicas: 3,
+			UpdatedReplicas:   3,
+			Strategy:          "RollingUpdate",
+		},
+	}
+
+	fake.ReplicaSetsData["default"] = map[string]ReplicaSetInfo{
+		"web-app-123": {
+			Name:              "web-app-123",
+			Namespace:         "default",
+			DesiredReplicas:   3,
+			CurrentReplicas:   3,
+			ReadyReplicas:     3,
+			AvailableReplicas: 3,
+			OwnerReferences: []OwnerReferenceInfo{
+				{Kind: "Deployment", Name: "web-app", Controller: true},
+			},
+		},
+	}
+
+	fake.StatefulSetsData["default"] = map[string]StatefulSetInfo{
+		"redis-set": {
+			Name:            "redis-set",
+			Namespace:       "default",
+			DesiredReplicas: 2,
+			ReadyReplicas:   2,
+			CurrentRevision: "redis-set-1",
+			ServiceName:     "redis-svc",
+		},
+	}
+
+	fake.DaemonSetsData["default"] = map[string]DaemonSetInfo{
+		"fluentd-ds": {
+			Name:             "fluentd-ds",
+			Namespace:        "default",
+			DesiredScheduled: 4,
+			NumberReady:      4,
+		},
+	}
+
+	fake.JobsData["default"] = map[string]JobInfo{
+		"batch-job": {
+			Name:        "batch-job",
+			Namespace:   "default",
+			Completions: 1,
+			Succeeded:   1,
+			OwnerReferences: []OwnerReferenceInfo{
+				{Kind: "CronJob", Name: "daily-cron", Controller: true},
+			},
+		},
+	}
+
+	fake.CronJobsData["default"] = map[string]CronJobInfo{
+		"daily-cron": {
+			Name:      "daily-cron",
+			Namespace: "default",
+			Schedule:  "0 0 * * *",
+			Suspend:   false,
+		},
+	}
+
+	// 1. Deployment
+	dep, err := fake.GetDeployment(ctx, "default", "web-app")
+	if err != nil || dep.DesiredReplicas != 3 || dep.Strategy != "RollingUpdate" {
+		t.Fatalf("unexpected Deployment result: %+v, err: %v", dep, err)
+	}
+
+	// 2. ReplicaSet
+	rs, err := fake.GetReplicaSet(ctx, "default", "web-app-123")
+	if err != nil || rs.Name != "web-app-123" || len(rs.OwnerReferences) != 1 || rs.OwnerReferences[0].Name != "web-app" {
+		t.Fatalf("unexpected ReplicaSet result: %+v, err: %v", rs, err)
+	}
+
+	// 3. StatefulSet
+	sts, err := fake.GetStatefulSet(ctx, "default", "redis-set")
+	if err != nil || sts.ServiceName != "redis-svc" || sts.DesiredReplicas != 2 {
+		t.Fatalf("unexpected StatefulSet result: %+v, err: %v", sts, err)
+	}
+
+	// 4. DaemonSet
+	ds, err := fake.GetDaemonSet(ctx, "default", "fluentd-ds")
+	if err != nil || ds.DesiredScheduled != 4 {
+		t.Fatalf("unexpected DaemonSet result: %+v, err: %v", ds, err)
+	}
+
+	// 5. Job
+	job, err := fake.GetJob(ctx, "default", "batch-job")
+	if err != nil || job.Succeeded != 1 || len(job.OwnerReferences) != 1 {
+		t.Fatalf("unexpected Job result: %+v, err: %v", job, err)
+	}
+
+	// 6. CronJob
+	cj, err := fake.GetCronJob(ctx, "default", "daily-cron")
+	if err != nil || cj.Schedule != "0 0 * * *" {
+		t.Fatalf("unexpected CronJob result: %+v, err: %v", cj, err)
+	}
+
+	// 7. Missing workload handling
+	_, err = fake.GetDeployment(ctx, "default", "missing-dep")
+	if err == nil {
+		t.Fatalf("expected error for missing Deployment")
+	}
+}
+

@@ -8,16 +8,22 @@ import (
 // FakeProvider is an in-memory InfrastructureProvider used for unit testing
 // evidence collection, data mapping, and diagnosis boundaries without a live cluster.
 type FakeProvider struct {
-	ClusterName       string
-	NodesData         []NodeInfo
-	GPUNodesData      map[string]NodeGPUResources       // nodeName -> NodeGPUResources
-	PodsData          map[string][]PodInfo              // namespace -> []PodInfo
-	ServicesData      map[string][]ServiceInfo          // namespace -> []ServiceInfo
-	PVCsData          map[string]map[string]PersistentVolumeClaimInfo // namespace -> name -> PVC
-	PVsData           map[string]PersistentVolumeInfo   // name -> PV
-	StorageClassesData map[string]StorageClassInfo       // name -> StorageClass
-	EventsData        map[string][]EventInfo            // podName -> []EventInfo
-	LogsData          map[string]ContainerLogInfo       // podName/container -> ContainerLogInfo
+	ClusterName        string
+	NodesData          []NodeInfo
+	GPUNodesData       map[string]NodeGPUResources                      // nodeName -> NodeGPUResources
+	PodsData           map[string][]PodInfo                             // namespace -> []PodInfo
+	ServicesData       map[string][]ServiceInfo                         // namespace -> []ServiceInfo
+	PVCsData           map[string]map[string]PersistentVolumeClaimInfo // namespace -> name -> PVC
+	PVsData            map[string]PersistentVolumeInfo                  // name -> PV
+	StorageClassesData map[string]StorageClassInfo                      // name -> StorageClass
+	DeploymentsData    map[string]map[string]DeploymentInfo             // namespace -> name -> Deployment
+	ReplicaSetsData    map[string]map[string]ReplicaSetInfo             // namespace -> name -> ReplicaSet
+	StatefulSetsData   map[string]map[string]StatefulSetInfo            // namespace -> name -> StatefulSet
+	DaemonSetsData     map[string]map[string]DaemonSetInfo              // namespace -> name -> DaemonSet
+	JobsData           map[string]map[string]JobInfo                    // namespace -> name -> Job
+	CronJobsData       map[string]map[string]CronJobInfo                // namespace -> name -> CronJob
+	EventsData         map[string][]EventInfo                           // podName -> []EventInfo
+	LogsData           map[string]ContainerLogInfo                      // podName/container -> ContainerLogInfo
 }
 
 func NewFakeProvider() *FakeProvider {
@@ -29,6 +35,12 @@ func NewFakeProvider() *FakeProvider {
 		PVCsData:           make(map[string]map[string]PersistentVolumeClaimInfo),
 		PVsData:            make(map[string]PersistentVolumeInfo),
 		StorageClassesData: make(map[string]StorageClassInfo),
+		DeploymentsData:    make(map[string]map[string]DeploymentInfo),
+		ReplicaSetsData:    make(map[string]map[string]ReplicaSetInfo),
+		StatefulSetsData:   make(map[string]map[string]StatefulSetInfo),
+		DaemonSetsData:     make(map[string]map[string]DaemonSetInfo),
+		JobsData:           make(map[string]map[string]JobInfo),
+		CronJobsData:       make(map[string]map[string]CronJobInfo),
 		EventsData:         make(map[string][]EventInfo),
 		LogsData:           make(map[string]ContainerLogInfo),
 	}
@@ -184,4 +196,76 @@ func (f *FakeProvider) GetContainerLogs(ctx context.Context, namespace, podName,
 		Unavailable:       true,
 		UnavailableReason: "no fake logs available",
 	}, nil
+}
+
+func (f *FakeProvider) GetDeployment(ctx context.Context, namespace, name string) (DeploymentInfo, error) {
+	if nsMap, ok := f.DeploymentsData[namespace]; ok {
+		if dep, ok := nsMap[name]; ok {
+			return dep, nil
+		}
+	}
+	return DeploymentInfo{Name: name, Namespace: namespace, Unavailable: true}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("deployment %q not found in namespace %q", name, namespace),
+	}
+}
+
+func (f *FakeProvider) GetReplicaSet(ctx context.Context, namespace, name string) (ReplicaSetInfo, error) {
+	if nsMap, ok := f.ReplicaSetsData[namespace]; ok {
+		if rs, ok := nsMap[name]; ok {
+			return rs, nil
+		}
+	}
+	return ReplicaSetInfo{Name: name, Namespace: namespace, Unavailable: true}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("replicaset %q not found in namespace %q", name, namespace),
+	}
+}
+
+func (f *FakeProvider) GetStatefulSet(ctx context.Context, namespace, name string) (StatefulSetInfo, error) {
+	if nsMap, ok := f.StatefulSetsData[namespace]; ok {
+		if sts, ok := nsMap[name]; ok {
+			return sts, nil
+		}
+	}
+	return StatefulSetInfo{Name: name, Namespace: namespace, Unavailable: true}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("statefulset %q not found in namespace %q", name, namespace),
+	}
+}
+
+func (f *FakeProvider) GetDaemonSet(ctx context.Context, namespace, name string) (DaemonSetInfo, error) {
+	if nsMap, ok := f.DaemonSetsData[namespace]; ok {
+		if ds, ok := nsMap[name]; ok {
+			return ds, nil
+		}
+	}
+	return DaemonSetInfo{Name: name, Namespace: namespace, Unavailable: true}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("daemonset %q not found in namespace %q", name, namespace),
+	}
+}
+
+func (f *FakeProvider) GetJob(ctx context.Context, namespace, name string) (JobInfo, error) {
+	if nsMap, ok := f.JobsData[namespace]; ok {
+		if job, ok := nsMap[name]; ok {
+			return job, nil
+		}
+	}
+	return JobInfo{Name: name, Namespace: namespace, Unavailable: true}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("job %q not found in namespace %q", name, namespace),
+	}
+}
+
+func (f *FakeProvider) GetCronJob(ctx context.Context, namespace, name string) (CronJobInfo, error) {
+	if nsMap, ok := f.CronJobsData[namespace]; ok {
+		if cj, ok := nsMap[name]; ok {
+			return cj, nil
+		}
+	}
+	return CronJobInfo{Name: name, Namespace: namespace, Unavailable: true}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("cronjob %q not found in namespace %q", name, namespace),
+	}
 }

@@ -830,6 +830,74 @@ Storage evidence is attached to the `EvidencePackage` as `storage_status` eviden
 
 ---
 
+## Feature 14 — Workload & Controller Evidence Collector
+
+> **"Feature 14 reports Kubernetes workload/controller configuration and state. It does not by itself determine whether a workload is healthy or unhealthy."**
+
+### Purpose & Scope
+
+Feature 14 extends the provider abstraction and unified evidence package to observe the workload controller managing target Pods, resolving owner reference chains and capturing detailed controller metrics, replica counts, rollout strategies, and conditions.
+
+### Extended Provider Interface & Types
+
+Added to `provider.InfrastructureProvider`:
+- `GetDeployment(ctx, namespace, name) (DeploymentInfo, error)`
+- `GetReplicaSet(ctx, namespace, name) (ReplicaSetInfo, error)`
+- `GetStatefulSet(ctx, namespace, name) (StatefulSetInfo, error)`
+- `GetDaemonSet(ctx, namespace, name) (DaemonSetInfo, error)`
+- `GetJob(ctx, namespace, name) (JobInfo, error)`
+- `GetCronJob(ctx, namespace, name) (CronJobInfo, error)`
+
+Domain Types:
+- `DeploymentInfo`: `Name`, `Namespace`, `DesiredReplicas`, `CurrentReplicas`, `ReadyReplicas`, `AvailableReplicas`, `UpdatedReplicas`, `UnavailableReplicas`, `ObservedGeneration`, `Strategy`, `Conditions`.
+- `ReplicaSetInfo`: `Name`, `Namespace`, `DesiredReplicas`, `CurrentReplicas`, `ReadyReplicas`, `AvailableReplicas`, `FullyLabeledReplicas`, `ObservedGeneration`, `OwnerReferences`, `Selector`.
+- `StatefulSetInfo`: `Name`, `Namespace`, `DesiredReplicas`, `CurrentReplicas`, `ReadyReplicas`, `UpdatedReplicas`, `CurrentRevision`, `UpdateRevision`, `ServiceName`, `ObservedGeneration`, `UpdateStrategy`, `Conditions`.
+- `DaemonSetInfo`: `Name`, `Namespace`, `DesiredScheduled`, `CurrentScheduled`, `NumberReady`, `NumberAvailable`, `NumberUnavailable`, `NumberMisscheduled`, `UpdatedScheduled`, `ObservedGeneration`.
+- `JobInfo`: `Name`, `Namespace`, `Completions`, `Parallelism`, `Active`, `Succeeded`, `Failed`, `StartTime`, `CompletionTime`, `BackoffLimit`, `OwnerReferences`, `Conditions`.
+- `CronJobInfo`: `Name`, `Namespace`, `Schedule`, `Suspend`, `ActiveJobsCount`, `LastScheduleTime`, `LastSuccessfulTime`, `ConcurrencyPolicy`.
+- `OwnerReferenceInfo`: `Kind`, `Name`, `UID`, `Controller`.
+- `WorkloadCondition`: `Type`, `Status`, `Reason`, `Message`, `LastTransitionTime`.
+- `PodInfo`: Updated with `OwnerReferences []OwnerReferenceInfo`.
+
+### Pod Owner Chain Resolution
+
+The collector uses Kubernetes `ownerReferences` as the sole source of truth to resolve controller ownership chains:
+
+1. **Deployment-managed Pods:** `Pod` → `ReplicaSet` → `Deployment`
+2. **StatefulSet-managed Pods:** `Pod` → `StatefulSet`
+3. **DaemonSet-managed Pods:** `Pod` → `DaemonSet`
+4. **Job-managed Pods:** `Pod` → `Job`
+5. **CronJob-managed Pods:** `Pod` → `Job` → `CronJob`
+6. **Standalone Pods:** Sets `controller_found: false` with reason `"pod has no owner reference (standalone pod)"`. No fake controller is ever invented.
+
+### Evidence Package Integration (`workload_status`)
+
+Workload evidence is attached to the `EvidencePackage` as `workload_status` evidence items for each pod:
+
+- **Controller-managed Pods:** Captures `direct_owner` (e.g. `ReplicaSet`), `root_controller` (e.g. `Deployment`), and complete controller specs/status metrics.
+- **Standalone Pods:** Sets `controller_found: false` and explicitly records the absence of an owner.
+
+### Controlled Cluster Verification
+
+1. **Deployment Test (`test-workload`):** Created 2-replica Deployment. Verified `workload_status` evidence matched `kubectl`:
+   - Direct owner: `ReplicaSet` (`test-workload-5b7857785f`)
+   - Root controller: `Deployment` (`test-workload`)
+   - Deployment status: `desired: 2`, `current: 2`, `ready: 2`, `available: 2`, `updated: 2`, `strategy: "RollingUpdate"`, condition `Available=True`.
+2. **Degraded Replica Test (`test-degraded-dep`):** Created Deployment with 2 replicas and unschedulable `nodeSelector`. Verified `workload_status` evidence matched `kubectl`:
+   - Reported exact actual status: `desired: 2`, `current: 2`, `ready: 0`, `available: 0`, `unavailable: 2`.
+   - Preserved real status without prematurely declaring a diagnosis failure.
+3. **StatefulSet Test (`test-statefulset`):** Created 1-replica StatefulSet with headless service `test-sts-svc`. Verified `workload_status` evidence matched `kubectl`:
+   - Direct owner & Root controller: `StatefulSet` (`test-statefulset`)
+   - Replicas: `desired: 1`, `current: 1`, `ready: 1`, `current_revision: "test-statefulset-bc77447df"`, `service_name: "test-sts-svc"`.
+4. **Job Test (`test-job`):** Created completing Job. Verified `workload_status` evidence matched `kubectl`:
+   - Direct owner & Root controller: `Job` (`test-job`)
+   - Status: `completions: 1`, `succeeded: 1`, `active: 0`, `failed: 0`.
+5. **Standalone Pod Test (`test-standalone-pod`):** Created unmanaged Pod directly. Verified `workload_status` evidence matched `kubectl`:
+   - `controller_found: false`, `reason: "pod has no owner reference (standalone pod)"`.
+6. **Cleanup:** All temporary test Deployments, StatefulSets, Jobs, Services, and Pods were deleted cleanly.
+
+---
+
 
 
 

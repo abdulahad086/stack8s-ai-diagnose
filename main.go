@@ -198,7 +198,29 @@ const (
 	SourceGPUStatus       EvidenceSource = "gpu_status"
 	SourceServiceStatus   EvidenceSource = "service_status"
 	SourceStorageStatus   EvidenceSource = "storage_status"
+	SourceWorkloadStatus  EvidenceSource = "workload_status"
 )
+
+type ControllerRefData struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	UID  string `json:"uid,omitempty"`
+}
+
+type WorkloadStatusData struct {
+	PodName         string                    `json:"pod_name"`
+	Namespace       string                    `json:"namespace"`
+	ControllerFound bool                      `json:"controller_found"`
+	DirectOwner     *ControllerRefData        `json:"direct_owner,omitempty"`
+	RootController  *ControllerRefData        `json:"root_controller,omitempty"`
+	Deployment      *provider.DeploymentInfo  `json:"deployment,omitempty"`
+	ReplicaSet      *provider.ReplicaSetInfo  `json:"replica_set,omitempty"`
+	StatefulSet     *provider.StatefulSetInfo `json:"stateful_set,omitempty"`
+	DaemonSet       *provider.DaemonSetInfo   `json:"daemon_set,omitempty"`
+	Job             *provider.JobInfo         `json:"job,omitempty"`
+	CronJob         *provider.CronJobInfo     `json:"cron_job,omitempty"`
+	Reason          string                    `json:"reason,omitempty"`
+}
 
 type ContainerEvidenceData struct {
 	Name               string `json:"name"`
@@ -622,6 +644,130 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 				},
 			})
 		}
+
+		// ── E_workload-type: workload_status (Feature 14) ─────────────────
+		workloadEv := WorkloadStatusData{
+			PodName:   pod.PodName,
+			Namespace: pod.Namespace,
+		}
+
+		if len(pod.OwnerReferences) == 0 {
+			workloadEv.ControllerFound = false
+			workloadEv.Reason = "pod has no owner reference (standalone pod)"
+		} else {
+			workloadEv.ControllerFound = true
+			var primaryOwner provider.OwnerReferenceInfo
+			foundCtrl := false
+			for _, o := range pod.OwnerReferences {
+				if o.Controller {
+					primaryOwner = o
+					foundCtrl = true
+					break
+				}
+			}
+			if !foundCtrl {
+				primaryOwner = pod.OwnerReferences[0]
+			}
+
+			workloadEv.DirectOwner = &ControllerRefData{
+				Kind: primaryOwner.Kind,
+				Name: primaryOwner.Name,
+				UID:  primaryOwner.UID,
+			}
+
+			switch primaryOwner.Kind {
+			case "ReplicaSet":
+				rsInfo, err := prov.GetReplicaSet(context.TODO(), pod.Namespace, primaryOwner.Name)
+				if err == nil {
+					workloadEv.ReplicaSet = &rsInfo
+					foundDep := false
+					for _, rsOwner := range rsInfo.OwnerReferences {
+						if rsOwner.Kind == "Deployment" {
+							depInfo, dErr := prov.GetDeployment(context.TODO(), pod.Namespace, rsOwner.Name)
+							if dErr == nil {
+								workloadEv.Deployment = &depInfo
+								workloadEv.RootController = &ControllerRefData{
+									Kind: "Deployment",
+									Name: depInfo.Name,
+									UID:  rsOwner.UID,
+								}
+								foundDep = true
+								break
+							}
+						}
+					}
+					if !foundDep {
+						workloadEv.RootController = workloadEv.DirectOwner
+					}
+				} else {
+					workloadEv.RootController = workloadEv.DirectOwner
+				}
+
+			case "Deployment":
+				depInfo, err := prov.GetDeployment(context.TODO(), pod.Namespace, primaryOwner.Name)
+				if err == nil {
+					workloadEv.Deployment = &depInfo
+				}
+				workloadEv.RootController = workloadEv.DirectOwner
+
+			case "StatefulSet":
+				stsInfo, err := prov.GetStatefulSet(context.TODO(), pod.Namespace, primaryOwner.Name)
+				if err == nil {
+					workloadEv.StatefulSet = &stsInfo
+				}
+				workloadEv.RootController = workloadEv.DirectOwner
+
+			case "DaemonSet":
+				dsInfo, err := prov.GetDaemonSet(context.TODO(), pod.Namespace, primaryOwner.Name)
+				if err == nil {
+					workloadEv.DaemonSet = &dsInfo
+				}
+				workloadEv.RootController = workloadEv.DirectOwner
+
+			case "Job":
+				jobInfo, err := prov.GetJob(context.TODO(), pod.Namespace, primaryOwner.Name)
+				if err == nil {
+					workloadEv.Job = &jobInfo
+					foundCJ := false
+					for _, jOwner := range jobInfo.OwnerReferences {
+						if jOwner.Kind == "CronJob" {
+							cjInfo, cjErr := prov.GetCronJob(context.TODO(), pod.Namespace, jOwner.Name)
+							if cjErr == nil {
+								workloadEv.CronJob = &cjInfo
+								workloadEv.RootController = &ControllerRefData{
+									Kind: "CronJob",
+									Name: cjInfo.Name,
+									UID:  jOwner.UID,
+								}
+								foundCJ = true
+								break
+							}
+						}
+					}
+					if !foundCJ {
+						workloadEv.RootController = workloadEv.DirectOwner
+					}
+				} else {
+					workloadEv.RootController = workloadEv.DirectOwner
+				}
+
+			case "CronJob":
+				cjInfo, err := prov.GetCronJob(context.TODO(), pod.Namespace, primaryOwner.Name)
+				if err == nil {
+					workloadEv.CronJob = &cjInfo
+				}
+				workloadEv.RootController = workloadEv.DirectOwner
+
+			default:
+				workloadEv.RootController = workloadEv.DirectOwner
+			}
+		}
+
+		podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+			ID:     nextID(),
+			Source: SourceWorkloadStatus,
+			Data:   workloadEv,
+		})
 
 		// ── E2..N-type: kubernetes_event ─────────────────────────────────
 		events, err := prov.GetPodEvents(context.TODO(), pod.Namespace, pod.PodName)

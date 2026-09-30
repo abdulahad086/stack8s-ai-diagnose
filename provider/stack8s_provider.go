@@ -72,6 +72,30 @@ func (s *Stack8sProvider) GetStorageClasses(ctx context.Context) ([]StorageClass
 	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }
 
+func (s *Stack8sProvider) GetDeployment(ctx context.Context, namespace, name string) (DeploymentInfo, error) {
+	return DeploymentInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetReplicaSet(ctx context.Context, namespace, name string) (ReplicaSetInfo, error) {
+	return ReplicaSetInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetStatefulSet(ctx context.Context, namespace, name string) (StatefulSetInfo, error) {
+	return StatefulSetInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetDaemonSet(ctx context.Context, namespace, name string) (DaemonSetInfo, error) {
+	return DaemonSetInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetJob(ctx context.Context, namespace, name string) (JobInfo, error) {
+	return JobInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetCronJob(ctx context.Context, namespace, name string) (CronJobInfo, error) {
+	return CronJobInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
 func (s *Stack8sProvider) GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error) {
 	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }

@@ -92,17 +92,142 @@ type PodVolumeInfo struct {
 	ReadOnly  bool   `json:"read_only,omitempty"`
 }
 
-// PodInfo represents the status, networking, storage volumes, and containers of a single pod.
+// PodInfo represents the status, networking, storage volumes, owner references, and containers of a single pod.
 type PodInfo struct {
-	PodName    string            `json:"pod_name"`
-	Namespace  string            `json:"namespace"`
-	Phase      string            `json:"phase"`
-	NodeName   string            `json:"node_name"`
-	PodIP      string            `json:"pod_ip,omitempty"`
-	Labels     map[string]string `json:"labels,omitempty"`
-	CreatedAt  string            `json:"created_at"`
-	Volumes    []PodVolumeInfo   `json:"volumes,omitempty"`
-	Containers []ContainerInfo   `json:"containers"`
+	PodName         string               `json:"pod_name"`
+	Namespace       string               `json:"namespace"`
+	Phase           string               `json:"phase"`
+	NodeName        string               `json:"node_name"`
+	PodIP           string               `json:"pod_ip,omitempty"`
+	Labels          map[string]string    `json:"labels,omitempty"`
+	CreatedAt       string               `json:"created_at"`
+	OwnerReferences []OwnerReferenceInfo `json:"owner_references,omitempty"`
+	Volumes         []PodVolumeInfo      `json:"volumes,omitempty"`
+	Containers      []ContainerInfo      `json:"containers"`
+}
+
+// ── Workload & Controller Domain Types (Feature 14) ──────────────────────────
+
+// OwnerReferenceInfo represents an owner reference on a Kubernetes object.
+type OwnerReferenceInfo struct {
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
+	Controller bool   `json:"controller,omitempty"`
+}
+
+// WorkloadCondition represents a condition on a workload controller (e.g. Deployment, StatefulSet, Job).
+type WorkloadCondition struct {
+	Type               string `json:"type"`
+	Status             string `json:"status"` // "True", "False", "Unknown"
+	Reason             string `json:"reason,omitempty"`
+	Message            string `json:"message,omitempty"`
+	LastTransitionTime string `json:"last_transition_time,omitempty"`
+}
+
+// DeploymentInfo represents a Kubernetes Deployment status and strategy.
+type DeploymentInfo struct {
+	Name                string              `json:"name"`
+	Namespace           string              `json:"namespace"`
+	DesiredReplicas     int32               `json:"desired_replicas"`
+	CurrentReplicas     int32               `json:"current_replicas"`
+	ReadyReplicas       int32               `json:"ready_replicas"`
+	AvailableReplicas   int32               `json:"available_replicas"`
+	UpdatedReplicas     int32               `json:"updated_replicas"`
+	UnavailableReplicas int32               `json:"unavailable_replicas"`
+	ObservedGeneration  int64               `json:"observed_generation"`
+	Strategy            string              `json:"strategy,omitempty"` // "RollingUpdate", "Recreate"
+	CreatedAt           string              `json:"created_at,omitempty"`
+	Conditions          []WorkloadCondition `json:"conditions,omitempty"`
+	Unavailable         bool                `json:"unavailable,omitempty"`
+	Reason              string              `json:"reason,omitempty"`
+}
+
+// ReplicaSetInfo represents a Kubernetes ReplicaSet status.
+type ReplicaSetInfo struct {
+	Name                 string               `json:"name"`
+	Namespace            string               `json:"namespace"`
+	DesiredReplicas      int32                `json:"desired_replicas"`
+	CurrentReplicas      int32                `json:"current_replicas"`
+	ReadyReplicas        int32                `json:"ready_replicas"`
+	AvailableReplicas    int32                `json:"available_replicas"`
+	FullyLabeledReplicas int32                `json:"fully_labeled_replicas,omitempty"`
+	ObservedGeneration   int64                `json:"observed_generation"`
+	OwnerReferences      []OwnerReferenceInfo `json:"owner_references,omitempty"`
+	Selector             map[string]string    `json:"selector,omitempty"`
+	CreatedAt            string               `json:"created_at,omitempty"`
+	Unavailable          bool                 `json:"unavailable,omitempty"`
+	Reason               string               `json:"reason,omitempty"`
+}
+
+// StatefulSetInfo represents a Kubernetes StatefulSet status.
+type StatefulSetInfo struct {
+	Name               string              `json:"name"`
+	Namespace          string              `json:"namespace"`
+	DesiredReplicas    int32               `json:"desired_replicas"`
+	CurrentReplicas    int32               `json:"current_replicas"`
+	ReadyReplicas      int32               `json:"ready_replicas"`
+	UpdatedReplicas    int32               `json:"updated_replicas"`
+	CurrentRevision    string              `json:"current_revision,omitempty"`
+	UpdateRevision     string              `json:"update_revision,omitempty"`
+	ServiceName        string              `json:"service_name,omitempty"`
+	ObservedGeneration int64               `json:"observed_generation"`
+	UpdateStrategy     string              `json:"update_strategy,omitempty"` // "RollingUpdate", "OnDelete"
+	CreatedAt          string              `json:"created_at,omitempty"`
+	Conditions         []WorkloadCondition `json:"conditions,omitempty"`
+	Unavailable        bool                `json:"unavailable,omitempty"`
+	Reason             string              `json:"reason,omitempty"`
+}
+
+// DaemonSetInfo represents a Kubernetes DaemonSet status.
+type DaemonSetInfo struct {
+	Name               string `json:"name"`
+	Namespace          string `json:"namespace"`
+	DesiredScheduled   int32  `json:"desired_scheduled"`
+	CurrentScheduled   int32  `json:"current_scheduled"`
+	NumberReady        int32  `json:"number_ready"`
+	NumberAvailable    int32  `json:"number_available"`
+	NumberUnavailable  int32  `json:"number_unavailable"`
+	NumberMisscheduled int32  `json:"number_misscheduled"`
+	UpdatedScheduled   int32  `json:"updated_scheduled"`
+	ObservedGeneration int64  `json:"observed_generation"`
+	CreatedAt          string `json:"created_at,omitempty"`
+	Unavailable        bool   `json:"unavailable,omitempty"`
+	Reason             string `json:"reason,omitempty"`
+}
+
+// JobInfo represents a Kubernetes Job status.
+type JobInfo struct {
+	Name            string               `json:"name"`
+	Namespace       string               `json:"namespace"`
+	Completions     int32                `json:"completions,omitempty"`
+	Parallelism     int32                `json:"parallelism,omitempty"`
+	Active          int32                `json:"active"`
+	Succeeded       int32                `json:"succeeded"`
+	Failed          int32                `json:"failed"`
+	StartTime       string               `json:"start_time,omitempty"`
+	CompletionTime  string               `json:"completion_time,omitempty"`
+	BackoffLimit    int32                `json:"backoff_limit,omitempty"`
+	OwnerReferences []OwnerReferenceInfo `json:"owner_references,omitempty"`
+	CreatedAt       string               `json:"created_at,omitempty"`
+	Conditions      []WorkloadCondition  `json:"conditions,omitempty"`
+	Unavailable     bool                 `json:"unavailable,omitempty"`
+	Reason          string               `json:"reason,omitempty"`
+}
+
+// CronJobInfo represents a Kubernetes CronJob status.
+type CronJobInfo struct {
+	Name               string `json:"name"`
+	Namespace          string `json:"namespace"`
+	Schedule           string `json:"schedule"`
+	Suspend            bool   `json:"suspend"`
+	ActiveJobsCount    int    `json:"active_jobs_count"`
+	LastScheduleTime   string `json:"last_schedule_time,omitempty"`
+	LastSuccessfulTime string `json:"last_successful_time,omitempty"`
+	ConcurrencyPolicy  string `json:"concurrency_policy,omitempty"` // "Allow", "Forbid", "Replace"
+	CreatedAt          string `json:"created_at,omitempty"`
+	Unavailable        bool   `json:"unavailable,omitempty"`
+	Reason             string `json:"reason,omitempty"`
 }
 
 // ── Storage Domain Types (Feature 13) ────────────────────────────────────────
@@ -287,6 +412,24 @@ type InfrastructureProvider interface {
 
 	// GetStorageClasses lists all StorageClasses in the cluster.
 	GetStorageClasses(ctx context.Context) ([]StorageClassInfo, error)
+
+	// GetDeployment returns detailed information for a Deployment by namespace and name.
+	GetDeployment(ctx context.Context, namespace, name string) (DeploymentInfo, error)
+
+	// GetReplicaSet returns detailed information for a ReplicaSet by namespace and name.
+	GetReplicaSet(ctx context.Context, namespace, name string) (ReplicaSetInfo, error)
+
+	// GetStatefulSet returns detailed information for a StatefulSet by namespace and name.
+	GetStatefulSet(ctx context.Context, namespace, name string) (StatefulSetInfo, error)
+
+	// GetDaemonSet returns detailed information for a DaemonSet by namespace and name.
+	GetDaemonSet(ctx context.Context, namespace, name string) (DaemonSetInfo, error)
+
+	// GetJob returns detailed information for a Job by namespace and name.
+	GetJob(ctx context.Context, namespace, name string) (JobInfo, error)
+
+	// GetCronJob returns detailed information for a CronJob by namespace and name.
+	GetCronJob(ctx context.Context, namespace, name string) (CronJobInfo, error)
 
 	// GetPodEvents lists all events for a specific pod.
 	GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error)

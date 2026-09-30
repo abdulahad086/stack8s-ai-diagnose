@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -391,16 +393,31 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			volumes = append(volumes, volInfo)
 		}
 
+		var ownerRefs []OwnerReferenceInfo
+		for _, o := range pod.OwnerReferences {
+			ctrl := false
+			if o.Controller != nil {
+				ctrl = *o.Controller
+			}
+			ownerRefs = append(ownerRefs, OwnerReferenceInfo{
+				Kind:       o.Kind,
+				Name:       o.Name,
+				UID:        string(o.UID),
+				Controller: ctrl,
+			})
+		}
+
 		result = append(result, PodInfo{
-			PodName:    pod.Name,
-			Namespace:  pod.Namespace,
-			Phase:      string(pod.Status.Phase),
-			NodeName:   nodeName,
-			PodIP:      pod.Status.PodIP,
-			Labels:     pod.Labels,
-			CreatedAt:  pod.CreationTimestamp.Format(time.RFC3339),
-			Volumes:    volumes,
-			Containers: containers,
+			PodName:         pod.Name,
+			Namespace:       pod.Namespace,
+			Phase:           string(pod.Status.Phase),
+			NodeName:        nodeName,
+			PodIP:           pod.Status.PodIP,
+			Labels:          pod.Labels,
+			CreatedAt:       pod.CreationTimestamp.Format(time.RFC3339),
+			OwnerReferences: ownerRefs,
+			Volumes:         volumes,
+			Containers:      containers,
 		})
 	}
 
@@ -837,4 +854,301 @@ func (p *LocalKubernetesProvider) GetContainerLogs(ctx context.Context, namespac
 	result.Lines = lines
 	result.LinesRetrieved = len(lines)
 	return result, nil
+}
+
+// ── Workload & Controller Provider Methods (Feature 14) ──────────────────────
+
+func mapDeploymentInfo(d appsv1.Deployment) DeploymentInfo {
+	strategy := string(d.Spec.Strategy.Type)
+	var conds []WorkloadCondition
+	for _, c := range d.Status.Conditions {
+		conds = append(conds, WorkloadCondition{
+			Type:               string(c.Type),
+			Status:             string(c.Status),
+			Reason:             c.Reason,
+			Message:            c.Message,
+			LastTransitionTime: c.LastTransitionTime.Format(time.RFC3339),
+		})
+	}
+
+	desired := int32(1)
+	if d.Spec.Replicas != nil {
+		desired = *d.Spec.Replicas
+	}
+
+	return DeploymentInfo{
+		Name:                d.Name,
+		Namespace:           d.Namespace,
+		DesiredReplicas:     desired,
+		CurrentReplicas:     d.Status.Replicas,
+		ReadyReplicas:       d.Status.ReadyReplicas,
+		AvailableReplicas:   d.Status.AvailableReplicas,
+		UpdatedReplicas:     d.Status.UpdatedReplicas,
+		UnavailableReplicas: d.Status.UnavailableReplicas,
+		ObservedGeneration:  d.Status.ObservedGeneration,
+		Strategy:            strategy,
+		CreatedAt:           d.CreationTimestamp.Format(time.RFC3339),
+		Conditions:          conds,
+	}
+}
+
+func (p *LocalKubernetesProvider) GetDeployment(ctx context.Context, namespace, name string) (DeploymentInfo, error) {
+	d, err := p.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return DeploymentInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: err.Error()}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("deployment %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	return mapDeploymentInfo(*d), nil
+}
+
+func mapReplicaSetInfo(rs appsv1.ReplicaSet) ReplicaSetInfo {
+	var ownerRefs []OwnerReferenceInfo
+	for _, o := range rs.OwnerReferences {
+		ctrl := false
+		if o.Controller != nil {
+			ctrl = *o.Controller
+		}
+		ownerRefs = append(ownerRefs, OwnerReferenceInfo{
+			Kind:       o.Kind,
+			Name:       o.Name,
+			UID:        string(o.UID),
+			Controller: ctrl,
+		})
+	}
+
+	desired := int32(1)
+	if rs.Spec.Replicas != nil {
+		desired = *rs.Spec.Replicas
+	}
+
+	var selector map[string]string
+	if rs.Spec.Selector != nil {
+		selector = rs.Spec.Selector.MatchLabels
+	}
+
+	return ReplicaSetInfo{
+		Name:                 rs.Name,
+		Namespace:            rs.Namespace,
+		DesiredReplicas:      desired,
+		CurrentReplicas:      rs.Status.Replicas,
+		ReadyReplicas:        rs.Status.ReadyReplicas,
+		AvailableReplicas:    rs.Status.AvailableReplicas,
+		FullyLabeledReplicas: rs.Status.FullyLabeledReplicas,
+		ObservedGeneration:   rs.Status.ObservedGeneration,
+		OwnerReferences:      ownerRefs,
+		Selector:             selector,
+		CreatedAt:            rs.CreationTimestamp.Format(time.RFC3339),
+	}
+}
+
+func (p *LocalKubernetesProvider) GetReplicaSet(ctx context.Context, namespace, name string) (ReplicaSetInfo, error) {
+	rs, err := p.clientset.AppsV1().ReplicaSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return ReplicaSetInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: err.Error()}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("replicaset %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	return mapReplicaSetInfo(*rs), nil
+}
+
+func mapStatefulSetInfo(sts appsv1.StatefulSet) StatefulSetInfo {
+	var conds []WorkloadCondition
+	for _, c := range sts.Status.Conditions {
+		conds = append(conds, WorkloadCondition{
+			Type:               string(c.Type),
+			Status:             string(c.Status),
+			Reason:             c.Reason,
+			Message:            c.Message,
+			LastTransitionTime: c.LastTransitionTime.Format(time.RFC3339),
+		})
+	}
+
+	desired := int32(1)
+	if sts.Spec.Replicas != nil {
+		desired = *sts.Spec.Replicas
+	}
+
+	strategy := string(sts.Spec.UpdateStrategy.Type)
+
+	return StatefulSetInfo{
+		Name:               sts.Name,
+		Namespace:          sts.Namespace,
+		DesiredReplicas:    desired,
+		CurrentReplicas:    sts.Status.Replicas,
+		ReadyReplicas:      sts.Status.ReadyReplicas,
+		UpdatedReplicas:    sts.Status.UpdatedReplicas,
+		CurrentRevision:    sts.Status.CurrentRevision,
+		UpdateRevision:     sts.Status.UpdateRevision,
+		ServiceName:        sts.Spec.ServiceName,
+		ObservedGeneration: sts.Status.ObservedGeneration,
+		UpdateStrategy:     strategy,
+		CreatedAt:          sts.CreationTimestamp.Format(time.RFC3339),
+		Conditions:         conds,
+	}
+}
+
+func (p *LocalKubernetesProvider) GetStatefulSet(ctx context.Context, namespace, name string) (StatefulSetInfo, error) {
+	sts, err := p.clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return StatefulSetInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: err.Error()}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("statefulset %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	return mapStatefulSetInfo(*sts), nil
+}
+
+func mapDaemonSetInfo(ds appsv1.DaemonSet) DaemonSetInfo {
+	return DaemonSetInfo{
+		Name:               ds.Name,
+		Namespace:          ds.Namespace,
+		DesiredScheduled:   ds.Status.DesiredNumberScheduled,
+		CurrentScheduled:   ds.Status.CurrentNumberScheduled,
+		NumberReady:        ds.Status.NumberReady,
+		NumberAvailable:    ds.Status.NumberAvailable,
+		NumberUnavailable:  ds.Status.NumberUnavailable,
+		NumberMisscheduled: ds.Status.NumberMisscheduled,
+		UpdatedScheduled:   ds.Status.UpdatedNumberScheduled,
+		ObservedGeneration: ds.Status.ObservedGeneration,
+		CreatedAt:          ds.CreationTimestamp.Format(time.RFC3339),
+	}
+}
+
+func (p *LocalKubernetesProvider) GetDaemonSet(ctx context.Context, namespace, name string) (DaemonSetInfo, error) {
+	ds, err := p.clientset.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return DaemonSetInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: err.Error()}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("daemonset %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	return mapDaemonSetInfo(*ds), nil
+}
+
+func mapJobInfo(job batchv1.Job) JobInfo {
+	var ownerRefs []OwnerReferenceInfo
+	for _, o := range job.OwnerReferences {
+		ctrl := false
+		if o.Controller != nil {
+			ctrl = *o.Controller
+		}
+		ownerRefs = append(ownerRefs, OwnerReferenceInfo{
+			Kind:       o.Kind,
+			Name:       o.Name,
+			UID:        string(o.UID),
+			Controller: ctrl,
+		})
+	}
+
+	var conds []WorkloadCondition
+	for _, c := range job.Status.Conditions {
+		conds = append(conds, WorkloadCondition{
+			Type:               string(c.Type),
+			Status:             string(c.Status),
+			Reason:             c.Reason,
+			Message:            c.Message,
+			LastTransitionTime: c.LastTransitionTime.Format(time.RFC3339),
+		})
+	}
+
+	completions := int32(1)
+	if job.Spec.Completions != nil {
+		completions = *job.Spec.Completions
+	}
+
+	parallelism := int32(1)
+	if job.Spec.Parallelism != nil {
+		parallelism = *job.Spec.Parallelism
+	}
+
+	backoffLimit := int32(6)
+	if job.Spec.BackoffLimit != nil {
+		backoffLimit = *job.Spec.BackoffLimit
+	}
+
+	startTime := ""
+	if job.Status.StartTime != nil {
+		startTime = job.Status.StartTime.Format(time.RFC3339)
+	}
+
+	completionTime := ""
+	if job.Status.CompletionTime != nil {
+		completionTime = job.Status.CompletionTime.Format(time.RFC3339)
+	}
+
+	return JobInfo{
+		Name:            job.Name,
+		Namespace:       job.Namespace,
+		Completions:     completions,
+		Parallelism:     parallelism,
+		Active:          job.Status.Active,
+		Succeeded:       job.Status.Succeeded,
+		Failed:          job.Status.Failed,
+		StartTime:       startTime,
+		CompletionTime:  completionTime,
+		BackoffLimit:    backoffLimit,
+		OwnerReferences: ownerRefs,
+		CreatedAt:       job.CreationTimestamp.Format(time.RFC3339),
+		Conditions:      conds,
+	}
+}
+
+func (p *LocalKubernetesProvider) GetJob(ctx context.Context, namespace, name string) (JobInfo, error) {
+	job, err := p.clientset.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return JobInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: err.Error()}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("job %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	return mapJobInfo(*job), nil
+}
+
+func mapCronJobInfo(cj batchv1.CronJob) CronJobInfo {
+	suspend := false
+	if cj.Spec.Suspend != nil {
+		suspend = *cj.Spec.Suspend
+	}
+
+	lastSched := ""
+	if cj.Status.LastScheduleTime != nil {
+		lastSched = cj.Status.LastScheduleTime.Format(time.RFC3339)
+	}
+
+	lastSucc := ""
+	if cj.Status.LastSuccessfulTime != nil {
+		lastSucc = cj.Status.LastSuccessfulTime.Format(time.RFC3339)
+	}
+
+	return CronJobInfo{
+		Name:               cj.Name,
+		Namespace:          cj.Namespace,
+		Schedule:           cj.Spec.Schedule,
+		Suspend:            suspend,
+		ActiveJobsCount:    len(cj.Status.Active),
+		LastScheduleTime:   lastSched,
+		LastSuccessfulTime: lastSucc,
+		ConcurrencyPolicy:  string(cj.Spec.ConcurrencyPolicy),
+		CreatedAt:          cj.CreationTimestamp.Format(time.RFC3339),
+	}
+}
+
+func (p *LocalKubernetesProvider) GetCronJob(ctx context.Context, namespace, name string) (CronJobInfo, error) {
+	cj, err := p.clientset.BatchV1().CronJobs(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return CronJobInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: err.Error()}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("cronjob %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	return mapCronJobInfo(*cj), nil
 }

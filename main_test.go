@@ -713,4 +713,165 @@ func TestBuildEvidencePackage_StorageEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildEvidencePackage_WorkloadEvidence(t *testing.T) {
+	fake := provider.NewFakeProvider()
+	fake.NodesData = []provider.NodeInfo{{Name: "node-1", Status: "Ready"}}
+
+	// Setup Deployment & ReplicaSet
+	fake.DeploymentsData["default"] = map[string]provider.DeploymentInfo{
+		"web-dep": {
+			Name:              "web-dep",
+			Namespace:         "default",
+			DesiredReplicas:   2,
+			ReadyReplicas:     2,
+			AvailableReplicas: 2,
+		},
+	}
+	fake.ReplicaSetsData["default"] = map[string]provider.ReplicaSetInfo{
+		"web-dep-rs": {
+			Name:            "web-dep-rs",
+			Namespace:       "default",
+			DesiredReplicas: 2,
+			ReadyReplicas:   2,
+			OwnerReferences: []provider.OwnerReferenceInfo{
+				{Kind: "Deployment", Name: "web-dep", Controller: true},
+			},
+		},
+	}
+
+	// Setup StatefulSet
+	fake.StatefulSetsData["default"] = map[string]provider.StatefulSetInfo{
+		"db-sts": {
+			Name:            "db-sts",
+			Namespace:       "default",
+			DesiredReplicas: 1,
+			ReadyReplicas:   1,
+			ServiceName:     "db-svc",
+		},
+	}
+
+	// Setup CronJob & Job
+	fake.CronJobsData["default"] = map[string]provider.CronJobInfo{
+		"daily-cron": {
+			Name:      "daily-cron",
+			Namespace: "default",
+			Schedule:  "0 0 * * *",
+		},
+	}
+	fake.JobsData["default"] = map[string]provider.JobInfo{
+		"daily-job": {
+			Name:      "daily-job",
+			Namespace: "default",
+			Succeeded: 1,
+			OwnerReferences: []provider.OwnerReferenceInfo{
+				{Kind: "CronJob", Name: "daily-cron", Controller: true},
+			},
+		},
+	}
+
+	// Setup Pods
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:   "pod-deploy-123",
+			Namespace: "default",
+			NodeName:  "node-1",
+			OwnerReferences: []provider.OwnerReferenceInfo{
+				{Kind: "ReplicaSet", Name: "web-dep-rs", Controller: true},
+			},
+		},
+		{
+			PodName:   "pod-sts-0",
+			Namespace: "default",
+			NodeName:  "node-1",
+			OwnerReferences: []provider.OwnerReferenceInfo{
+				{Kind: "StatefulSet", Name: "db-sts", Controller: true},
+			},
+		},
+		{
+			PodName:   "pod-job-abc",
+			Namespace: "default",
+			NodeName:  "node-1",
+			OwnerReferences: []provider.OwnerReferenceInfo{
+				{Kind: "Job", Name: "daily-job", Controller: true},
+			},
+		},
+		{
+			PodName:         "pod-standalone",
+			Namespace:       "default",
+			NodeName:        "node-1",
+			OwnerReferences: nil,
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+	if len(pkg.Pods) != 4 {
+		t.Fatalf("expected 4 pods in evidence package, got %d", len(pkg.Pods))
+	}
+
+	// 1. Verify pod-deploy-123 (Pod -> ReplicaSet -> Deployment)
+	var deployEv *WorkloadStatusData
+	for _, ev := range pkg.Pods[0].Evidence {
+		if ev.Source == SourceWorkloadStatus {
+			if wsd, ok := ev.Data.(WorkloadStatusData); ok {
+				deployEv = &wsd
+			}
+		}
+	}
+	if deployEv == nil || !deployEv.ControllerFound || deployEv.DirectOwner == nil || deployEv.DirectOwner.Kind != "ReplicaSet" {
+		t.Fatalf("unexpected direct owner for pod-deploy-123: %+v", deployEv)
+	}
+	if deployEv.RootController == nil || deployEv.RootController.Kind != "Deployment" || deployEv.RootController.Name != "web-dep" {
+		t.Fatalf("unexpected root controller for pod-deploy-123: %+v", deployEv)
+	}
+	if deployEv.Deployment == nil || deployEv.Deployment.DesiredReplicas != 2 {
+		t.Fatalf("unexpected deployment data for pod-deploy-123: %+v", deployEv.Deployment)
+	}
+
+	// 2. Verify pod-sts-0 (Pod -> StatefulSet)
+	var stsEv *WorkloadStatusData
+	for _, ev := range pkg.Pods[1].Evidence {
+		if ev.Source == SourceWorkloadStatus {
+			if wsd, ok := ev.Data.(WorkloadStatusData); ok {
+				stsEv = &wsd
+			}
+		}
+	}
+	if stsEv == nil || !stsEv.ControllerFound || stsEv.DirectOwner.Kind != "StatefulSet" || stsEv.StatefulSet == nil {
+		t.Fatalf("unexpected statefulset evidence for pod-sts-0: %+v", stsEv)
+	}
+	if stsEv.StatefulSet.ServiceName != "db-svc" {
+		t.Fatalf("unexpected service name in statefulset: %+v", stsEv.StatefulSet)
+	}
+
+	// 3. Verify pod-job-abc (Pod -> Job -> CronJob)
+	var jobEv *WorkloadStatusData
+	for _, ev := range pkg.Pods[2].Evidence {
+		if ev.Source == SourceWorkloadStatus {
+			if wsd, ok := ev.Data.(WorkloadStatusData); ok {
+				jobEv = &wsd
+			}
+		}
+	}
+	if jobEv == nil || !jobEv.ControllerFound || jobEv.DirectOwner.Kind != "Job" || jobEv.RootController.Kind != "CronJob" {
+		t.Fatalf("unexpected job/cronjob chain for pod-job-abc: %+v", jobEv)
+	}
+	if jobEv.CronJob == nil || jobEv.CronJob.Schedule != "0 0 * * *" {
+		t.Fatalf("unexpected cronjob data: %+v", jobEv.CronJob)
+	}
+
+	// 4. Verify pod-standalone (Standalone Pod)
+	var standaloneEv *WorkloadStatusData
+	for _, ev := range pkg.Pods[3].Evidence {
+		if ev.Source == SourceWorkloadStatus {
+			if wsd, ok := ev.Data.(WorkloadStatusData); ok {
+				standaloneEv = &wsd
+			}
+		}
+	}
+	if standaloneEv == nil || standaloneEv.ControllerFound {
+		t.Fatalf("expected ControllerFound=false for standalone pod, got: %+v", standaloneEv)
+	}
+}
+
+
 
