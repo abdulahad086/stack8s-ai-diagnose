@@ -8,19 +8,21 @@ import (
 // FakeProvider is an in-memory InfrastructureProvider used for unit testing
 // evidence collection, data mapping, and diagnosis boundaries without a live cluster.
 type FakeProvider struct {
-	ClusterName string
-	NodesData   []NodeInfo
-	PodsData    map[string][]PodInfo        // namespace -> []PodInfo
-	EventsData  map[string][]EventInfo      // podName -> []EventInfo
-	LogsData    map[string]ContainerLogInfo // podName/container -> ContainerLogInfo
+	ClusterName  string
+	NodesData    []NodeInfo
+	GPUNodesData map[string]NodeGPUResources // nodeName -> NodeGPUResources
+	PodsData     map[string][]PodInfo        // namespace -> []PodInfo
+	EventsData   map[string][]EventInfo      // podName -> []EventInfo
+	LogsData     map[string]ContainerLogInfo // podName/container -> ContainerLogInfo
 }
 
 func NewFakeProvider() *FakeProvider {
 	return &FakeProvider{
-		ClusterName: "https://fake.cluster.local:6443",
-		PodsData:    make(map[string][]PodInfo),
-		EventsData:  make(map[string][]EventInfo),
-		LogsData:    make(map[string]ContainerLogInfo),
+		ClusterName:  "https://fake.cluster.local:6443",
+		GPUNodesData: make(map[string]NodeGPUResources),
+		PodsData:     make(map[string][]PodInfo),
+		EventsData:   make(map[string][]EventInfo),
+		LogsData:     make(map[string]ContainerLogInfo),
 	}
 }
 
@@ -51,6 +53,37 @@ func (f *FakeProvider) GetNode(ctx context.Context, name string) (NodeInfo, erro
 	return NodeInfo{}, &ProviderError{
 		Code:    ErrCodeResourceNotFound,
 		Message: fmt.Sprintf("node %q not found in fake provider", name),
+	}
+}
+
+func (f *FakeProvider) GetNodeGPUResources(ctx context.Context, name string) (NodeGPUResources, error) {
+	if name == "" || name == "<not yet scheduled>" || name == "<none>" {
+		return NodeGPUResources{
+			NodeName:           name,
+			GPUAvailable:       false,
+			GPUResourceExposed: false,
+		}, nil
+	}
+	if gpuRes, ok := f.GPUNodesData[name]; ok {
+		return gpuRes, nil
+	}
+	// Default: if node exists in NodesData but not in GPUNodesData, return non-exposed GPU
+	for _, n := range f.NodesData {
+		if n.Name == name {
+			return NodeGPUResources{
+				NodeName:           name,
+				GPUAvailable:       false,
+				GPUResourceExposed: false,
+			}, nil
+		}
+	}
+	return NodeGPUResources{
+		NodeName:           name,
+		GPUAvailable:       false,
+		GPUResourceExposed: false,
+	}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("node %q not found in fake provider for GPU check", name),
 	}
 }
 

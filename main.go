@@ -195,6 +195,7 @@ const (
 	SourceKubernetesEvent EvidenceSource = "kubernetes_event"
 	SourceContainerLogs   EvidenceSource = "container_logs"
 	SourceNodeStatus      EvidenceSource = "node_status"
+	SourceGPUStatus       EvidenceSource = "gpu_status"
 )
 
 type ContainerEvidenceData struct {
@@ -210,6 +211,8 @@ type ContainerEvidenceData struct {
 	CPULimit           string `json:"cpu_limit,omitempty"`
 	MemoryRequest      string `json:"memory_request,omitempty"`
 	MemoryLimit        string `json:"memory_limit,omitempty"`
+	GPURequest         string `json:"gpu_request,omitempty"`
+	GPULimit           string `json:"gpu_limit,omitempty"`
 }
 
 type PodStatusData struct {
@@ -229,6 +232,19 @@ type NodeStatusData struct {
 	SystemInfo   *provider.NodeSystemInfo `json:"system_info,omitempty"`
 	Unavailable  bool                    `json:"unavailable,omitempty"`
 	Reason       string                  `json:"reason,omitempty"`
+}
+
+type GPUStatusData struct {
+	NodeName           string `json:"node_name"`
+	NodeAssigned       bool   `json:"node_assigned"`
+	GPUAvailable       bool   `json:"gpu_available"`
+	GPUResourceExposed bool   `json:"gpu_resource_exposed"`
+	ResourceName       string `json:"resource_name,omitempty"`
+	GPUCapacity        string `json:"gpu_capacity,omitempty"`
+	GPUAllocatable     string `json:"gpu_allocatable,omitempty"`
+	GPUModel           string `json:"gpu_model,omitempty"`
+	Unavailable        bool   `json:"unavailable,omitempty"`
+	Reason             string `json:"reason,omitempty"`
 }
 
 type KubernetesEventData struct {
@@ -323,6 +339,8 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 				CPULimit:           c.CPULimit,
 				MemoryRequest:      c.MemoryRequest,
 				MemoryLimit:        c.MemoryLimit,
+				GPURequest:         c.GPURequest,
+				GPULimit:           c.GPULimit,
 			})
 		}
 		podStatus := PodStatusData{
@@ -374,6 +392,52 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 					NodeName:     "<none>",
 					NodeAssigned: false,
 					Reason:       "pod has no assigned node (unscheduled)",
+				},
+			})
+		}
+
+		// ── E_gpu-type: gpu_status (Feature 11) ───────────────────────────
+		if pod.NodeName != "" && pod.NodeName != "<not yet scheduled>" && pod.NodeName != "<none>" {
+			gpuInfo, err := prov.GetNodeGPUResources(context.TODO(), pod.NodeName)
+			if err != nil {
+				podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+					ID:     nextID(),
+					Source: SourceGPUStatus,
+					Data: GPUStatusData{
+						NodeName:           pod.NodeName,
+						NodeAssigned:       true,
+						GPUAvailable:       false,
+						GPUResourceExposed: false,
+						Unavailable:        true,
+						Reason:             err.Error(),
+					},
+				})
+			} else {
+				podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+					ID:     nextID(),
+					Source: SourceGPUStatus,
+					Data: GPUStatusData{
+						NodeName:           gpuInfo.NodeName,
+						NodeAssigned:       true,
+						GPUAvailable:       gpuInfo.GPUAvailable,
+						GPUResourceExposed: gpuInfo.GPUResourceExposed,
+						ResourceName:       gpuInfo.ResourceName,
+						GPUCapacity:        gpuInfo.Capacity,
+						GPUAllocatable:     gpuInfo.Allocatable,
+						GPUModel:           gpuInfo.Model,
+					},
+				})
+			}
+		} else {
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceGPUStatus,
+				Data: GPUStatusData{
+					NodeName:           "<none>",
+					NodeAssigned:       false,
+					GPUAvailable:       false,
+					GPUResourceExposed: false,
+					Reason:             "pod has no assigned node (unscheduled)",
 				},
 			})
 		}

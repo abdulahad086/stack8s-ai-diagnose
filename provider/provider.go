@@ -27,6 +27,21 @@ type NodeResources struct {
 	StorageAllocatable string `json:"storage_allocatable,omitempty"`
 }
 
+// NodeGPUResources represents GPU capacity, allocatable, and metadata for a Node.
+//
+// Semantics:
+//   - Capacity / Allocatable: Kubernetes resource quantities reported for extended GPU resources (e.g. nvidia.com/gpu).
+//   - Note: These quantities represent cluster configuration state, NOT real-time runtime GPU utilization.
+type NodeGPUResources struct {
+	NodeName           string `json:"node_name"`
+	GPUAvailable       bool   `json:"gpu_available"`
+	GPUResourceExposed bool   `json:"gpu_resource_exposed"`
+	ResourceName       string `json:"resource_name,omitempty"` // e.g. "nvidia.com/gpu", "amd.com/gpu"
+	Model              string `json:"model,omitempty"`         // Vendor/model if exposed in labels
+	Capacity           string `json:"capacity,omitempty"`     // Total GPU capacity reported by node
+	Allocatable        string `json:"allocatable,omitempty"`  // GPU amount allocatable to workloads
+}
+
 // NodeSystemInfo holds node operating system and kernel metadata.
 type NodeSystemInfo struct {
 	KubeletVersion   string `json:"kubelet_version,omitempty"`
@@ -65,6 +80,8 @@ type ContainerInfo struct {
 	CPULimit      string `json:"cpu_limit,omitempty"`
 	MemoryRequest string `json:"memory_request,omitempty"`
 	MemoryLimit   string `json:"memory_limit,omitempty"`
+	GPURequest    string `json:"gpu_request,omitempty"`
+	GPULimit      string `json:"gpu_limit,omitempty"`
 }
 
 // PodInfo represents the status and containers of a single pod.
@@ -147,6 +164,9 @@ type InfrastructureProvider interface {
 
 	// GetNode returns detailed information for a specific node by name.
 	GetNode(ctx context.Context, name string) (NodeInfo, error)
+
+	// GetNodeGPUResources returns GPU resource capacity, allocatable, and status for a node.
+	GetNodeGPUResources(ctx context.Context, name string) (NodeGPUResources, error)
 
 	// GetPods lists all pods in the given namespace with container state & resource limits.
 	GetPods(ctx context.Context, namespace string) ([]PodInfo, error)

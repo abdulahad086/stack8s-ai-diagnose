@@ -378,3 +378,94 @@ func TestBuildEvidencePackage_NodeEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildEvidencePackage_GPUEvidence(t *testing.T) {
+	fake := provider.NewFakeProvider()
+	fake.NodesData = []provider.NodeInfo{
+		{Name: "gpu-node-1", Status: "Ready"},
+		{Name: "cpu-node-1", Status: "Ready"},
+	}
+	fake.GPUNodesData["gpu-node-1"] = provider.NodeGPUResources{
+		NodeName:           "gpu-node-1",
+		GPUAvailable:       true,
+		GPUResourceExposed: true,
+		ResourceName:       "nvidia.com/gpu",
+		Model:              "NVIDIA A100-SXM4-80GB",
+		Capacity:           "4",
+		Allocatable:        "4",
+	}
+
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:   "gpu-pod",
+			Namespace: "default",
+			NodeName:  "gpu-node-1",
+			Containers: []provider.ContainerInfo{
+				{
+					Name:       "cuda-app",
+					Image:      "nvidia/cuda:12.0.0-base-ubuntu22.04",
+					GPURequest: "nvidia.com/gpu: 1",
+					GPULimit:   "nvidia.com/gpu: 1",
+				},
+			},
+		},
+		{
+			PodName:   "cpu-pod",
+			Namespace: "default",
+			NodeName:  "cpu-node-1",
+		},
+		{
+			PodName:   "pending-gpu-pod",
+			Namespace: "default",
+			NodeName:  "<not yet scheduled>",
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+	if len(pkg.Pods) != 3 {
+		t.Fatalf("expected 3 pods in evidence package, got %d", len(pkg.Pods))
+	}
+
+	// 1. Verify gpu-pod GPU evidence and container requests
+	var gpuStatus *GPUStatusData
+	for _, ev := range pkg.Pods[0].Evidence {
+		if ev.Source == SourceGPUStatus {
+			if gsd, ok := ev.Data.(GPUStatusData); ok {
+				gpuStatus = &gsd
+			}
+		}
+	}
+	if gpuStatus == nil || !gpuStatus.GPUAvailable || !gpuStatus.GPUResourceExposed || gpuStatus.ResourceName != "nvidia.com/gpu" || gpuStatus.GPUCapacity != "4" {
+		t.Fatalf("unexpected gpu_status for gpu-pod: %+v", gpuStatus)
+	}
+	c := pkg.Pods[0].Evidence[0].Data.(PodStatusData).Containers[0]
+	if c.GPURequest != "nvidia.com/gpu: 1" || c.GPULimit != "nvidia.com/gpu: 1" {
+		t.Fatalf("unexpected container GPU requests: %+v", c)
+	}
+
+	// 2. Verify cpu-pod GPU evidence (un-exposed)
+	var cpuGpuStatus *GPUStatusData
+	for _, ev := range pkg.Pods[1].Evidence {
+		if ev.Source == SourceGPUStatus {
+			if gsd, ok := ev.Data.(GPUStatusData); ok {
+				cpuGpuStatus = &gsd
+			}
+		}
+	}
+	if cpuGpuStatus == nil || cpuGpuStatus.GPUAvailable || cpuGpuStatus.GPUResourceExposed {
+		t.Fatalf("expected unexposed GPU for cpu-pod, got: %+v", cpuGpuStatus)
+	}
+
+	// 3. Verify pending-gpu-pod GPU evidence (unscheduled)
+	var pendingGpuStatus *GPUStatusData
+	for _, ev := range pkg.Pods[2].Evidence {
+		if ev.Source == SourceGPUStatus {
+			if gsd, ok := ev.Data.(GPUStatusData); ok {
+				pendingGpuStatus = &gsd
+			}
+		}
+	}
+	if pendingGpuStatus == nil || pendingGpuStatus.NodeAssigned || pendingGpuStatus.NodeName != "<none>" {
+		t.Fatalf("expected unscheduled pending pod to have node_assigned=false, got: %+v", pendingGpuStatus)
+	}
+}
+

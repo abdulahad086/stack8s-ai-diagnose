@@ -47,16 +47,18 @@ Infrastructure data queries are abstracted through the `InfrastructureProvider` 
 - **Interface:** `provider.InfrastructureProvider` defines methods:
   - `GetNodes(ctx)`
   - `GetNode(ctx, name)`
+  - `GetNodeGPUResources(ctx, name)`
   - `GetPods(ctx, namespace)`
   - `GetPodEvents(ctx, namespace, podName)`
   - `GetContainerLogs(ctx, namespace, podName, containerName, tailLines)`
-- **Domain Types:** `NodeInfo`, `NodeResources`, `NodeSystemInfo`, `PodInfo`, `ContainerInfo`, `EventInfo`, `ContainerLogInfo`.
+- **Domain Types:** `NodeInfo`, `NodeResources`, `NodeGPUResources`, `NodeSystemInfo`, `PodInfo`, `ContainerInfo`, `EventInfo`, `ContainerLogInfo`.
 - **Client Isolation:** `k8s.io/client-go`, `k8s.io/api`, and `k8s.io/apimachinery` structs are strictly contained inside `provider/local_k8s.go`. They are never passed to higher-level diagnostic layers.
 
 ### 2. Evidence Collection Layer (`buildEvidencePackage`)
 - Depends **only** on `InfrastructureProvider` and domain types.
 - Converts provider domain objects into normalized `EvidencePackage` JSON structures with sequential IDs (`E1`, `E2`, …).
 - **Node & Resource Evidence (Feature 10):** Includes `node_status` evidence items with explicit `NodeAssigned` flags (`true` for scheduled pods with node capacity/allocatable, `false` for unscheduled pending pods).
+- **GPU Evidence (Feature 11):** Includes `gpu_status` evidence items representing extended GPU resources (e.g. `nvidia.com/gpu`), node capacity/allocatable, container requests/limits, and node model metadata. Handles GPU-unexposed nodes cleanly with `gpu_resource_exposed: false` without fabricating values.
 - Does not know whether data originated from local Kubernetes or Stack8s.
 
 ### 3. Deterministic Diagnosis Engine (`diagnoseEvidence`)
@@ -72,14 +74,17 @@ Infrastructure data queries are abstracted through the `InfrastructureProvider` 
 
 ---
 
-## Resource Semantics (Feature 10)
+## Resource & GPU Semantics (Feature 10 & 11)
 
 > **Node capacity and allocatable are configuration/state information reported by Kubernetes. They are not equivalent to real-time resource utilization.**
+>
+> **Feature 11 reports GPU resource information exposed by the infrastructure. It does not infer real-time GPU utilization.**
 
-- **Capacity:** Total physical/virtual resource reported by the Node hardware.
+- **Capacity:** Total physical/virtual resource reported by the Node hardware (e.g. 4 CPUs, 8 GPUs).
 - **Allocatable:** Resource amount Kubernetes makes available for workload scheduling after reserving system memory/CPU.
-- **Request:** Minimum resource guaranteed/reserved for a container by Kubernetes scheduler.
+- **Request:** Minimum resource guaranteed/reserved for a container by Kubernetes scheduler (e.g. `nvidia.com/gpu: 1`).
 - **Limit:** Maximum resource cap enforced for a container.
+- **GPU Availability vs Utilization:** `gpu_available: true` indicates allocatable GPU resource > 0 on the node. It does NOT represent real-time GPU telemetry (which requires `nvidia-smi` or Prometheus GPU metrics collectors).
 
 ---
 
@@ -93,7 +98,7 @@ When access to the actual Stack8s backend/API is available:
        client *stack8s.Client
    }
    ```
-2. Map Stack8s API responses to standard domain types (`NodeInfo`, `PodInfo`, `EventInfo`, `ContainerLogInfo`).
+2. Map Stack8s API responses to standard domain types (`NodeInfo`, `NodeGPUResources`, `PodInfo`, `EventInfo`, `ContainerLogInfo`).
 3. Set environment variable `STACK8S_PROVIDER=stack8s`.
 4. **Zero changes** will be required in `buildEvidencePackage`, `diagnoseEvidence`, or dataset generation.
 

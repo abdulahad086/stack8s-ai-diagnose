@@ -687,6 +687,47 @@ Node evidence is attached to the `EvidencePackage` as `node_status` evidence ite
 1. **Resource Specification Test (`test-resource-spec`):** harmless Pod specifying `requests: {cpu: "100m", memory: "64Mi"}` and `limits: {cpu: "200m", memory: "128Mi"}` verified via `kubectl` and collector.
 2. **Resource Scheduling Failure Test (`test-pending-cpu`):** safe Pod requesting `cpu: "500"` (500 CPUs, exceeding node allocatable CPU of 4) verified via `kubectl` to trigger `FailedScheduling` (`0/1 nodes are available: 1 Insufficient cpu.`). Verified `node_assigned = false` in evidence package and cleaned up.
 
+---
+
+## Feature 11 — GPU Evidence Collector
+
+> **Feature 11 reports GPU resource information exposed by the infrastructure. It does not infer real-time GPU utilization.**
+
+### Purpose & Scope
+
+Feature 11 extends the provider abstraction and unified evidence package to collect extended GPU resources (such as `nvidia.com/gpu`, `amd.com/gpu`, `intel.com/gpu`), GPU node capacity/allocatable resources, container GPU requests/limits, and GPU model metadata.
+
+### Environment Handling & Safety
+
+Feature 11 handles all 4 cluster GPU states safely:
+
+1. **No GPU Resource Exposed:** Safely returns `gpu_resource_exposed: false` and `gpu_available: false` without fabricating 0 count values.
+2. **GPU Resource Exists with 0 Allocatable:** Reports `gpu_resource_exposed: true`, `gpu_available: false`, `gpu_capacity: "1"`, `gpu_allocatable: "0"`.
+3. **GPU API / Provider Error:** Captures error in `gpu_status` evidence without crashing.
+4. **GPU Resource Exists with Allocatable > 0:** Captures `gpu_resource_exposed: true`, `gpu_available: true`, `gpu_capacity`, `gpu_allocatable`, `gpu_model`, and `resource_name`.
+
+### Extended Provider Interface & Types
+
+Added to `provider.InfrastructureProvider`:
+- `GetNodeGPUResources(ctx, name) (NodeGPUResources, error)`
+
+Domain Types:
+- `NodeGPUResources`: `NodeName`, `GPUAvailable`, `GPUResourceExposed`, `ResourceName`, `Model`, `Capacity`, `Allocatable`.
+- `ContainerInfo`: Updated with `GPURequest` and `GPULimit`.
+
+### Evidence Package Integration (`gpu_status`)
+
+GPU evidence is attached to the `EvidencePackage` as `gpu_status` evidence items for each pod:
+
+- **Scheduled Pods:** Queries host node for GPU extended resources and includes `gpu_available`, `gpu_resource_exposed`, `resource_name`, `capacity`, `allocatable`, and `model`.
+- **Unscheduled / Pending Pods:** Sets `node_assigned = false`, `node_name = "<none>"`, and `gpu_available = false` without inventing a fake node.
+
+### Environment Detection Result
+
+- **Local Cluster (`docker-desktop`):** Evaluated via `kubectl get nodes -o json` and node description. Extended GPU resource (`nvidia.com/gpu`) is **not exposed** by local Docker Desktop cluster.
+- **Collector Output:** The application correctly reports `gpu_resource_exposed: false` and `gpu_available: false` for `docker-desktop` without fabricating GPU objects.
+- **Synthetic Unit Verification:** Complete unit tests (`TestFakeProviderGPUResources`, `TestBuildEvidencePackage_GPUEvidence`) test GPU-positive nodes, multiple GPUs, container GPU requests (`nvidia.com/gpu: 1`), and pending unscheduled pods using `FakeProvider`.
+
 
 
 

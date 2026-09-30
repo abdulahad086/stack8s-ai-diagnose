@@ -40,6 +40,10 @@ func (s *Stack8sProvider) GetNode(ctx context.Context, name string) (NodeInfo, e
 	return NodeInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }
 
+func (s *Stack8sProvider) GetNodeGPUResources(ctx context.Context, name string) (NodeGPUResources, error) {
+	return NodeGPUResources{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
 func (s *Stack8sProvider) GetPods(ctx context.Context, namespace string) ([]PodInfo, error) {
 	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }

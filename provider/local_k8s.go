@@ -172,6 +172,97 @@ func (p *LocalKubernetesProvider) GetNode(ctx context.Context, name string) (Nod
 	return mapNodeInfo(*node), nil
 }
 
+// mapNodeGPUResources converts raw corev1.Node GPU capacity and allocatable extended resources into domain NodeGPUResources.
+func mapNodeGPUResources(node corev1.Node) NodeGPUResources {
+	res := NodeGPUResources{
+		NodeName:           node.Name,
+		GPUAvailable:       false,
+		GPUResourceExposed: false,
+	}
+
+	gpuKeys := []string{"nvidia.com/gpu", "amd.com/gpu", "intel.com/gpu", "gpu.intel.com/i915"}
+	var matchedResource corev1.ResourceName
+	var found bool
+
+	// Search node status capacity for GPU extended resource keys
+	for k := range node.Status.Capacity {
+		kStr := string(k)
+		for _, gKey := range gpuKeys {
+			if strings.EqualFold(kStr, gKey) {
+				matchedResource = k
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+		if strings.Contains(strings.ToLower(kStr), "gpu") {
+			matchedResource = k
+			found = true
+			break
+		}
+	}
+
+	if found {
+		res.GPUResourceExposed = true
+		res.ResourceName = string(matchedResource)
+
+		if capQty, ok := node.Status.Capacity[matchedResource]; ok {
+			res.Capacity = capQty.String()
+		}
+		if allocQty, ok := node.Status.Allocatable[matchedResource]; ok {
+			res.Allocatable = allocQty.String()
+			if !allocQty.IsZero() && allocQty.Value() > 0 {
+				res.GPUAvailable = true
+			}
+		}
+
+		// Read GPU product/model from node labels if exposed by device plugin or Node Feature Discovery (NFD)
+		for lKey, lVal := range node.Labels {
+			lKeyLower := strings.ToLower(lKey)
+			if strings.Contains(lKeyLower, "gpu.product") ||
+				strings.Contains(lKeyLower, "gpu.machine") ||
+				strings.Contains(lKeyLower, "gpu.family") ||
+				strings.Contains(lKeyLower, "gpu.model") {
+				res.Model = lVal
+				break
+			}
+		}
+		if res.Model == "" {
+			res.Model = "unknown"
+		}
+	}
+
+	return res
+}
+
+// GetNodeGPUResources returns GPU resource capacity, allocatable, and status for a specific node.
+func (p *LocalKubernetesProvider) GetNodeGPUResources(ctx context.Context, name string) (NodeGPUResources, error) {
+	if name == "" || name == "<not yet scheduled>" || name == "<none>" {
+		return NodeGPUResources{
+			NodeName:           name,
+			GPUAvailable:       false,
+			GPUResourceExposed: false,
+		}, nil
+	}
+
+	node, err := p.clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return NodeGPUResources{
+			NodeName:           name,
+			GPUAvailable:       false,
+			GPUResourceExposed: false,
+		}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("node %q not found for GPU query", name),
+			Err:     err,
+		}
+	}
+
+	return mapNodeGPUResources(*node), nil
+}
+
 // containerStateString formats a corev1.ContainerState into a domain string.
 func containerStateString(state corev1.ContainerState) string {
 	switch {
@@ -237,6 +328,22 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			}
 			if memLim, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
 				ci.MemoryLimit = memLim.String()
+			}
+
+			// Extract GPU requests and limits from extended resources
+			for rName, qty := range c.Resources.Requests {
+				rStr := string(rName)
+				if strings.Contains(strings.ToLower(rStr), "gpu") {
+					ci.GPURequest = fmt.Sprintf("%s: %s", rStr, qty.String())
+					break
+				}
+			}
+			for rName, qty := range c.Resources.Limits {
+				rStr := string(rName)
+				if strings.Contains(strings.ToLower(rStr), "gpu") {
+					ci.GPULimit = fmt.Sprintf("%s: %s", rStr, qty.String())
+					break
+				}
 			}
 
 			if cs, ok := statusMap[c.Name]; ok {

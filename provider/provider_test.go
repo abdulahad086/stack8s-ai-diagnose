@@ -138,3 +138,50 @@ func TestProviderErrorFormatting(t *testing.T) {
 		t.Fatalf("unexpected error format: %s", pe.Error())
 	}
 }
+
+func TestFakeProviderGPUResources(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	// 1. Node with exposed GPU
+	fake.NodesData = []NodeInfo{
+		{Name: "gpu-node-1", Status: "Ready"},
+		{Name: "cpu-node-1", Status: "Ready"},
+	}
+	fake.GPUNodesData["gpu-node-1"] = NodeGPUResources{
+		NodeName:           "gpu-node-1",
+		GPUAvailable:       true,
+		GPUResourceExposed: true,
+		ResourceName:       "nvidia.com/gpu",
+		Model:              "NVIDIA A100-SXM4-80GB",
+		Capacity:           "8",
+		Allocatable:        "8",
+	}
+
+	// Test querying GPU node
+	gpuRes, err := fake.GetNodeGPUResources(ctx, "gpu-node-1")
+	if err != nil {
+		t.Fatalf("unexpected error getting GPU resources: %v", err)
+	}
+	if !gpuRes.GPUAvailable || !gpuRes.GPUResourceExposed || gpuRes.ResourceName != "nvidia.com/gpu" || gpuRes.Capacity != "8" || gpuRes.Allocatable != "8" || gpuRes.Model != "NVIDIA A100-SXM4-80GB" {
+		t.Fatalf("unexpected GPU resources output: %+v", gpuRes)
+	}
+
+	// 2. Node with no GPU exposed
+	cpuRes, err := fake.GetNodeGPUResources(ctx, "cpu-node-1")
+	if err != nil {
+		t.Fatalf("unexpected error getting CPU node GPU resources: %v", err)
+	}
+	if cpuRes.GPUAvailable || cpuRes.GPUResourceExposed {
+		t.Fatalf("expected GPUNotExposed for cpu-node-1, got: %+v", cpuRes)
+	}
+
+	// 3. Unscheduled/Pending pod node query
+	pendingRes, err := fake.GetNodeGPUResources(ctx, "<not yet scheduled>")
+	if err != nil {
+		t.Fatalf("unexpected error querying unscheduled pod node: %v", err)
+	}
+	if pendingRes.GPUAvailable || pendingRes.GPUResourceExposed {
+		t.Fatalf("expected unscheduled node to return un-exposed GPU, got: %+v", pendingRes)
+	}
+}
