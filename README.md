@@ -1,23 +1,20 @@
 # stack8s-ai-diagnose
 
-A Go prototype that connects to a real Kubernetes cluster and collects diagnostic information.
+A Go prototype that connects to a real Kubernetes cluster and collects diagnostic information — nodes, pod status, events, and container logs — using only the official `client-go` library. No AI, no mock data, no Stack8s integration.
 
 ---
 
 ## Feature 1 — Kubernetes Connectivity
 
 ### What it does
-
-Verifies that the Go program can connect to a real Kubernetes cluster using `client-go` and list all cluster nodes with their Ready status.
+Verifies that the Go program can connect to a real Kubernetes cluster and list all cluster nodes with their Ready status.
 
 ### Current Kubernetes Context
-
 ```
 docker-desktop
 ```
 
 ### How it connects
-
 1. Reads kubeconfig from `$KUBECONFIG` or `~/.kube/config`.
 2. Builds a REST config via `clientcmd.BuildConfigFromFlags`.
 3. Creates a typed clientset via `kubernetes.NewForConfig`.
@@ -26,20 +23,13 @@ docker-desktop
 No credentials or tokens are printed.
 
 ### How to run
-
 ```bash
 go run main.go
-```
-
-Or build first:
-
-```bash
-go build -o k8s-check .
-./k8s-check
+# or
+go build -o k8s-check . && ./k8s-check
 ```
 
 ### Expected output (Feature 1 section)
-
 ```
 Connected to Kubernetes cluster via: https://127.0.0.1:6443
 
@@ -54,10 +44,7 @@ docker-desktop    Ready
 ## Feature 2 — Pod Status Collector
 
 ### What it does
-
-Retrieves and displays the real status of all pods in the `default` namespace of the live Kubernetes cluster.
-
-No AI, no diagnosis logic, no Stack8s integration.
+Retrieves and displays the real status of all pods in the `default` namespace.
 
 ### Fields collected per pod
 
@@ -77,170 +64,180 @@ No AI, no diagnosis logic, no Stack8s integration.
 | 12 | Last termination exit code | `pod.Status.ContainerStatuses[*].LastTerminationState.Terminated.ExitCode` |
 
 ### Security note
-
-- **No Secret values are collected or printed.**
-- No environment variable values are printed.
-- No passwords, tokens, certificates, or kubeconfig credentials are printed.
+No Secret values, environment variables, passwords, tokens, certificates, or kubeconfig credentials are printed.
 
 ### Namespace
-
 `default` — hardcoded for the MVP.
-
-### Edge cases handled
-
-| Scenario | Handling |
-|----------|----------|
-| No pods in namespace | Prints `No pods found in namespace: default` |
-| Pod not yet scheduled | Shows `<not yet scheduled>` for node name |
-| Pod pending, no container status | Shows spec image, `Ready: false`, `State: Pending` |
-| Container Running | Shows start time |
-| Container Waiting | Shows reason + message |
-| Container Terminated | Shows reason + exit code |
-| Multiple containers per pod | All containers iterated and printed |
-| Missing last termination info | Section omitted silently |
 
 ---
 
 ## Feature 3 — Kubernetes Events Collector
 
 ### What Kubernetes Events are
-
-Kubernetes Events are structured records that the control plane and kubelet write when something significant happens to a workload — scheduling, image pulling, container starting, OOMKills, back-offs, etc. They are the first place to look when diagnosing why a pod is not working correctly.
+Kubernetes Events are structured records written by the control plane and kubelet when something significant happens to a workload — scheduling, image pulling, container starting, OOMKills, back-offs, etc.
 
 ### Why Events are useful for diagnosis
-
-- They show the exact sequence of actions Kubernetes took for a pod.
-- They surface warnings (e.g. `BackOff`, `Failed`, `OOMKilled`) before a pod enters a crash loop.
-- They provide human-readable messages with timing — when the scheduler assigned the pod, when the image was pulled, when the container started.
+- Show the exact sequence of actions Kubernetes took for a pod.
+- Surface warnings (`BackOff`, `Failed`, `OOMKilled`) before a pod enters a crash loop.
+- Provide human-readable messages with precise timing.
 
 ### Fields collected per event
 
 | # | Field | Source |
 |---|-------|--------|
-| 1 | Event reason | `event.Reason` |
-| 2 | Event type | `event.Type` (`Normal` / `Warning`) |
-| 3 | Event message | `event.Message` |
+| 1 | Reason | `event.Reason` |
+| 2 | Type | `event.Type` |
+| 3 | Message | `event.Message` |
 | 4 | Involved object kind | `event.InvolvedObject.Kind` |
 | 5 | Involved object name | `event.InvolvedObject.Name` |
 | 6 | Namespace | `event.Namespace` |
-| 7 | First observed timestamp | `event.FirstTimestamp` |
-| 8 | Last observed timestamp | `event.LastTimestamp` |
+| 7 | First observed | `event.FirstTimestamp` |
+| 8 | Last observed | `event.LastTimestamp` |
 | 9 | Count | `event.Count` |
 | 10 | Source component | `event.Source.Component` |
 
 ### How events are filtered
+Field selector: `involvedObject.name=<podName>,involvedObject.namespace=<ns>,involvedObject.kind=Pod` — same strategy as `kubectl describe pod`.
 
-Events are fetched using a Kubernetes API field selector:
-
-```
-involvedObject.name=<podName>,involvedObject.namespace=<namespace>,involvedObject.kind=Pod
-```
-
-This is the same strategy `kubectl describe pod` uses internally. Only events directly associated with the specific pod are returned — unrelated cluster events are not included.
-
-Events are sorted **chronologically** (oldest → newest) using `LastTimestamp`, falling back to `FirstTimestamp`.
-
-### Security note
-
-- **No Secret values are collected or printed.**
-- No credentials, tokens, or kubeconfig contents are printed.
-- Event messages from Kubernetes are passed through as-is (they never contain Secret data).
-
-### How to run
-
+### How to verify with kubectl
 ```bash
-go run main.go
-```
-
-All three features (nodes, pod status, events) run in a single invocation.
-
-### How to verify events with kubectl
-
-```bash
-# Quick view
 kubectl get events -n default --field-selector involvedObject.name=<pod-name> --sort-by='.lastTimestamp'
-
-# Full detail
 kubectl describe pod <pod-name> -n default
 ```
 
-### Actual test result (Feature 3)
+---
 
-Pod tested: **`test-nginx`** (`nginx:1.27-alpine`) in `default` namespace.
+## Feature 4 — Container Logs Collector
+
+### What container logs are
+Container logs are the raw stdout/stderr output produced by the application running inside a Kubernetes container. They are the primary source of application-level diagnostic information — startup errors, connection failures, authentication errors, crashes, configuration problems, and exceptions.
+
+### Why logs are useful for diagnosis
+- Reveal the exact error message an application printed before crashing.
+- Show configuration issues that Kubernetes itself cannot see.
+- Provide application-level context that supplements Kubernetes Events.
+- Essential for diagnosing `CrashLoopBackOff`, `OOMKilled`, and silent failures.
+
+### How logs are retrieved
+Uses the Kubernetes Logs API via `client-go`:
+```go
+clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+    Container: containerName,
+    TailLines: &tailLines,   // bounded — never streams indefinitely
+}).Stream(context.TODO())
+```
+This is a **snapshot collector**, not a live log tailer. Logs are read once and the stream is closed immediately.
+
+### Current line limit
+**100 lines** (most recent). Defined by the `defaultLogTailLines` constant. Never requests unbounded log history.
+
+### Namespace scope
+`default` — matches Feature 2 and Feature 3.
+
+### Container selection behaviour
+
+| Scenario | Behaviour |
+|----------|-----------|
+| Single-container pod | Container selected automatically |
+| Multi-container pod | Logs collected for **each** container in `pod.Spec.Containers` order |
+| Container not yet started (`Waiting`) | Prints `No logs available for container: <name> (container not yet started)` — non-fatal |
+| Container name does not exist | Kubernetes API returns error → printed as `WARNING` — non-fatal |
+| Empty log output | Prints `No logs available for container: <name>` — non-fatal |
+| Log stream read error | Printed as `WARNING` — non-fatal |
+
+### Security considerations
+- **No Secret values are collected or printed.**
+- No credentials, tokens, certificates, or kubeconfig contents are printed.
+- Log content is passed through from the Kubernetes API as-is. Application logs may contain sensitive data — treat them accordingly in production use.
+- Logs are bounded to 100 lines per container. No unbounded retrieval.
+- No log persistence is implemented. Logs are only printed during the diagnostic run.
+
+### How to verify with kubectl
+```bash
+# Last 100 lines for a specific container
+kubectl logs <pod-name> -n default -c <container-name> --tail=100
+
+# All logs for a single-container pod
+kubectl logs <pod-name> -n default
+```
+
+### Actual test results (Feature 4)
+
+#### Test A — `test-logger` (busybox:1.36, `Completed` pod)
+
+Workload:
+```yaml
+name: test-logger
+container: logger
+image: busybox:1.36
+command: echo STACK8S_TEST_LOG_1 && ... && echo 'feature4 log collector verified'
+restartPolicy: Never
+```
+
+**kubectl reference:**
+```
+STACK8S_TEST_LOG_1
+STACK8S_TEST_LOG_2
+STACK8S_TEST_LOG_3
+STACK8S_TEST_LOG_4
+STACK8S_TEST_LOG_5
+feature4 log collector verified
+```
 
 **Go program output:**
 ```
-── Kubernetes Events for pod: test-nginx ────────────────────────
+── Container Logs: test-logger / logger (last 100 lines) ─────────────
+Lines retrieved: 6
 
-    Event 1
-      Type      : Normal
-      Reason    : Scheduled
-      Message   : Successfully assigned default/test-nginx to docker-desktop
-      Object    : Pod/test-nginx
-      Source    : default-scheduler
-      Count     : 1
-      First Seen: 2026-09-30 11:58:50 UTC
-      Last Seen : 2026-09-30 11:58:50 UTC
+│ STACK8S_TEST_LOG_1
+│ STACK8S_TEST_LOG_2
+│ STACK8S_TEST_LOG_3
+│ STACK8S_TEST_LOG_4
+│ STACK8S_TEST_LOG_5
+│ feature4 log collector verified
+```
+All 6 lines match exactly. ✅
 
-    Event 2
-      Type      : Normal
-      Reason    : Pulling
-      Message   : Pulling image "nginx:1.27-alpine"
-      Object    : Pod/test-nginx
-      Source    : kubelet
-      Count     : 1
-      First Seen: 2026-09-30 11:58:53 UTC
-      Last Seen : 2026-09-30 11:58:53 UTC
+#### Test B — `test-nginx` (nginx:1.27-alpine, `Running` pod)
 
-    Event 3
-      Type      : Normal
-      Reason    : Pulled
-      Message   : Successfully pulled image "nginx:1.27-alpine" in 2.327s (2.328s including waiting). Image size: 20984244 bytes.
-      Object    : Pod/test-nginx
-      Source    : kubelet
-      Count     : 1
-      First Seen: 2026-09-30 11:58:55 UTC
-      Last Seen : 2026-09-30 11:58:55 UTC
-
-    Event 4
-      Type      : Normal
-      Reason    : Created
-      Message   : Created container nginx
-      Object    : Pod/test-nginx
-      Source    : kubelet
-      Count     : 1
-      First Seen: 2026-09-30 11:58:55 UTC
-      Last Seen : 2026-09-30 11:58:55 UTC
-
-    Event 5
-      Type      : Normal
-      Reason    : Started
-      Message   : Started container nginx
-      Object    : Pod/test-nginx
-      Source    : kubelet
-      Count     : 1
-      First Seen: 2026-09-30 11:58:56 UTC
-      Last Seen : 2026-09-30 11:58:56 UTC
+**kubectl reference:**
+```
+/docker-entrypoint.sh: /docker-entrypoint.d/ is not empty, will attempt to perform configuration
+...
+2026/09/30 06:58:56 [notice] 1#1: nginx/1.27.5
+2026/09/30 06:58:56 [notice] 1#1: start worker processes
+2026/09/30 06:58:56 [notice] 1#1: start worker process 30
+...
 ```
 
-**kubectl reference output (verified match):**
+**Go program output:**
 ```
-LAST SEEN   TYPE     REASON      OBJECT           MESSAGE
-8m46s       Normal   Scheduled   pod/test-nginx   Successfully assigned default/test-nginx to docker-desktop
-8m43s       Normal   Pulling     pod/test-nginx   Pulling image "nginx:1.27-alpine"
-8m41s       Normal   Pulled      pod/test-nginx   Successfully pulled image "nginx:1.27-alpine" in 2.327s ...
-8m41s       Normal   Created     pod/test-nginx   Created container nginx
-8m40s       Normal   Started     pod/test-nginx   Started container nginx
+── Container Logs: test-nginx / nginx (last 100 lines) ─────────────
+Lines retrieved: 19
+
+│ /docker-entrypoint.sh: /docker-entrypoint.d/ is not empty, will attempt to perform configuration
+│ /docker-entrypoint.sh: Looking for shell scripts in /docker-entrypoint.d/
+│ ...
+│ 2026/09/30 06:58:56 [notice] 1#1: nginx/1.27.5
+│ 2026/09/30 06:58:56 [notice] 1#1: start worker processes
+│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 30
+│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 31
+│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 32
+│ 2026/09/30 06:58:56 [notice] 1#1: start worker process 33
 ```
+19 lines retrieved, content matches kubectl. ✅
 
-All 5 events matched. ✅
+### Limitations
+- Only `default` namespace is queried (MVP scope).
+- Log line limit is fixed at 100 per container (configurable by changing `defaultLogTailLines`).
+- No log persistence — diagnostic run only.
+- If events have expired from Kubernetes TTL, they will not appear (Kubernetes behaviour, not a collector bug).
 
-### Test pod
+### Test pods
 
-`test-nginx` (`nginx:1.27-alpine`) is left running in the `default` namespace as a harmless test workload. To remove it:
-
+Both test pods are left in the `default` namespace. To clean up:
 ```bash
-kubectl delete pod test-nginx -n default
+kubectl delete pod test-nginx test-logger -n default
 ```
 
 ---

@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -15,6 +17,10 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+// defaultLogTailLines is the maximum number of recent log lines retrieved per
+// container. Bounded to avoid retrieving unbounded log history.
+const defaultLogTailLines int64 = 100
 
 // buildClient resolves the kubeconfig and returns a REST config + typed clientset.
 // It respects the $KUBECONFIG environment variable, falling back to ~/.kube/config.
@@ -103,7 +109,7 @@ func containerState(state corev1.ContainerState) string {
 }
 
 // collectPods retrieves all pods from the given namespace, prints their status,
-// and then calls collectEvents for each pod.
+// then calls collectEvents and collectContainerLogs for each pod/container.
 // No Secret values, environment variables, passwords, tokens, or certificates are printed.
 func collectPods(clientset *kubernetes.Clientset, namespace string) {
 	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{})
@@ -132,6 +138,12 @@ func collectPods(clientset *kubernetes.Clientset, namespace string) {
 			nodeName = "<not yet scheduled>"
 		}
 		fmt.Printf("    Node        : %s\n", nodeName)
+
+		// Collect all container names defined in the spec (used for log collection below)
+		containerNames := make([]string, 0, len(pod.Spec.Containers))
+		for _, c := range pod.Spec.Containers {
+			containerNames = append(containerNames, c.Name)
+		}
 
 		if len(pod.Status.ContainerStatuses) == 0 {
 			// Pod may be pending with no status yet
@@ -177,6 +189,11 @@ func collectPods(clientset *kubernetes.Clientset, namespace string) {
 
 		// Feature 3: collect and display Kubernetes Events for this pod
 		collectEvents(clientset, pod.Namespace, pod.Name)
+
+		// Feature 4: collect and display recent container logs for each container
+		for _, containerName := range containerNames {
+			collectContainerLogs(clientset, pod.Namespace, pod.Name, containerName, defaultLogTailLines)
+		}
 	}
 	fmt.Println()
 }
@@ -259,6 +276,69 @@ func collectEvents(clientset *kubernetes.Clientset, namespace, podName string) {
 	}
 }
 
+// ── Feature 4: Container Logs Collector ──────────────────────────────────────
+
+// collectContainerLogs retrieves the most recent `tailLines` log lines from the
+// specified container in the given pod/namespace using the Kubernetes Logs API.
+//
+// Behaviour:
+//   - Logs are bounded to tailLines (default: 100). Never streams indefinitely.
+//   - If the container has not started yet (Waiting state), logs are not available
+//     and a clear message is printed instead of returning an error.
+//   - If the container name does not exist in the pod, the API returns an error
+//     which is surfaced as a WARNING (non-fatal).
+//   - No Secret values, credentials, tokens, or kubeconfig contents are printed.
+func collectContainerLogs(clientset *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64) {
+	fmt.Printf("\n    ── Container Logs: %s / %s (last %d lines) ─────────────\n",
+		podName, containerName, tailLines)
+
+	logOpts := &corev1.PodLogOptions{
+		Container: containerName,
+		TailLines: &tailLines,
+		// Timestamps are disabled: they add RFC3339 prefixes that clutter output.
+		// Enable here if timestamp-per-line is needed: Timestamps: true,
+	}
+
+	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
+
+	stream, err := req.Stream(context.TODO())
+	if err != nil {
+		// Common non-fatal causes: container still starting, container name wrong,
+		// pod in Pending state. Treat as WARNING so other pods still print.
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "waiting to start") ||
+			strings.Contains(errMsg, "ContainerCreating") {
+			fmt.Printf("    No logs available for container: %s (container not yet started)\n", containerName)
+		} else {
+			fmt.Fprintf(os.Stderr, "    WARNING: could not retrieve logs for %s/%s: %v\n",
+				podName, containerName, err)
+		}
+		return
+	}
+	defer stream.Close()
+
+	buf, err := io.ReadAll(stream)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "    WARNING: error reading log stream for %s/%s: %v\n",
+			podName, containerName, err)
+		return
+	}
+
+	logContent := strings.TrimRight(string(buf), "\n")
+	if logContent == "" {
+		fmt.Printf("    No logs available for container: %s\n", containerName)
+		return
+	}
+
+	// Print each log line indented for readability
+	lines := strings.Split(logContent, "\n")
+	fmt.Printf("    Lines retrieved: %d\n", len(lines))
+	fmt.Println()
+	for _, line := range lines {
+		fmt.Printf("    │ %s\n", line)
+	}
+}
+
 // ── Entry Point ───────────────────────────────────────────────────────────────
 
 func main() {
@@ -269,5 +349,6 @@ func main() {
 
 	// Feature 2: collect pod status from the default namespace
 	// Feature 3: collectEvents is called inside collectPods for each pod
+	// Feature 4: collectContainerLogs is called inside collectPods for each container
 	collectPods(clientset, "default")
 }
