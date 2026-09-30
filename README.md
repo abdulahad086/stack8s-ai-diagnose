@@ -728,6 +728,49 @@ GPU evidence is attached to the `EvidencePackage` as `gpu_status` evidence items
 - **Collector Output:** The application correctly reports `gpu_resource_exposed: false` and `gpu_available: false` for `docker-desktop` without fabricating GPU objects.
 - **Synthetic Unit Verification:** Complete unit tests (`TestFakeProviderGPUResources`, `TestBuildEvidencePackage_GPUEvidence`) test GPU-positive nodes, multiple GPUs, container GPU requests (`nvidia.com/gpu: 1`), and pending unscheduled pods using `FakeProvider`.
 
+---
+
+## Feature 12 — Service & Network Evidence Collector
+
+> **Feature 12 collects observable Kubernetes Service and Endpoint state. It does not perform end-to-end network connectivity or latency probing.**
+
+### Purpose & Scope
+
+Feature 12 extends the provider abstraction and unified evidence package to inspect Kubernetes Services, Service ports, target ports, selectors, and backing Endpoints (ready and unready IP addresses) for target workloads.
+
+### Extended Provider Interface & Types
+
+Added to `provider.InfrastructureProvider`:
+- `GetServices(ctx, namespace) ([]ServiceInfo, error)`
+- `GetService(ctx, namespace, name) (ServiceInfo, error)`
+
+Domain Types:
+- `ServiceInfo`: `Name`, `Namespace`, `Type` (`ClusterIP`, `NodePort`, `LoadBalancer`, `ExternalName`), `ClusterIP`, `ExternalIPs`, `Selector`, `CreatedAt`, `Ports`, `Subsets`.
+- `ServicePortInfo`: `Name`, `Protocol`, `Port`, `TargetPort`, `NodePort`.
+- `EndpointSubsetInfo`: `Addresses`, `Ports`, `ReadyAddressCount`, `NotReadyAddrCount`.
+- `EndpointAddressInfo`: `IP`, `NodeName`, `PodName`, `TargetRef`, `Ready`.
+- `PodInfo`: Updated with `PodIP` and `Labels`.
+
+### Evidence Package Integration (`service_status`)
+
+Service evidence is attached to the `EvidencePackage` as `service_status` evidence items for each pod:
+
+- **Pods matching Service selector:** Attaches matching Service specifications, ports, endpoints, and explicitly reports `selector_matched: true`, `pod_in_endpoints: true/false`, and `pod_endpoint_ready: true/false`.
+- **Pods with no matching Service:** Sets `service_found: false`, `selector_matched: false`, and records reason `"no Kubernetes Service selector matches this pod's labels"`.
+
+### Controlled Cluster Verification
+
+1. Exposed `test-nginx` pod locally as `test-nginx-service` (`app=test-nginx,feature=stack8s-feature2`).
+2. Verified `service_status` evidence output:
+   - `service_found: true`
+   - `service_name: "test-nginx-service"`
+   - `cluster_ip: "10.96.26.41"`
+   - `selector_matched: true`
+   - `pod_in_endpoints: true` (`10.1.0.6:80`)
+   - `pod_endpoint_ready: true`
+3. Verified `test-logger` (no matching selector) produced `service_found: false`.
+4. Deleted temporary test service cleanly.
+
 
 
 

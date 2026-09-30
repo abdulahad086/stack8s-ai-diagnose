@@ -84,14 +84,64 @@ type ContainerInfo struct {
 	GPULimit      string `json:"gpu_limit,omitempty"`
 }
 
-// PodInfo represents the status and containers of a single pod.
+// PodInfo represents the status, networking, and containers of a single pod.
 type PodInfo struct {
-	PodName    string          `json:"pod_name"`
-	Namespace  string          `json:"namespace"`
-	Phase      string          `json:"phase"`
-	NodeName   string          `json:"node_name"`
-	CreatedAt  string          `json:"created_at"`
-	Containers []ContainerInfo `json:"containers"`
+	PodName    string            `json:"pod_name"`
+	Namespace  string            `json:"namespace"`
+	Phase      string            `json:"phase"`
+	NodeName   string            `json:"node_name"`
+	PodIP      string            `json:"pod_ip,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	CreatedAt  string            `json:"created_at"`
+	Containers []ContainerInfo   `json:"containers"`
+}
+
+// ── Network & Service Domain Types (Feature 12) ─────────────────────────────
+
+// ServicePortInfo represents a single port exposed by a Kubernetes Service.
+type ServicePortInfo struct {
+	Name       string `json:"name,omitempty"`
+	Protocol   string `json:"protocol"` // "TCP", "UDP", "SCTP"
+	Port       int32  `json:"port"`     // Service Port
+	TargetPort string `json:"target_port"` // Target Port (number or name)
+	NodePort   int32  `json:"node_port,omitempty"` // NodePort if Type is NodePort or LoadBalancer
+}
+
+// EndpointAddressInfo represents an IP endpoint address backing a Service.
+type EndpointAddressInfo struct {
+	IP        string `json:"ip"`
+	NodeName  string `json:"node_name,omitempty"`
+	PodName   string `json:"pod_name,omitempty"`
+	TargetRef string `json:"target_ref,omitempty"` // e.g. "Pod/test-nginx"
+	Ready     bool   `json:"ready"`
+}
+
+// EndpointPortInfo represents a port exposed on an endpoint address.
+type EndpointPortInfo struct {
+	Name     string `json:"name,omitempty"`
+	Port     int32  `json:"port"`
+	Protocol string `json:"protocol"`
+}
+
+// EndpointSubsetInfo represents a subset of addresses and ports for a Service.
+type EndpointSubsetInfo struct {
+	Addresses         []EndpointAddressInfo `json:"addresses"`
+	Ports             []EndpointPortInfo    `json:"ports"`
+	ReadyAddressCount int                   `json:"ready_address_count"`
+	NotReadyAddrCount int                   `json:"not_ready_address_count"`
+}
+
+// ServiceInfo represents a Kubernetes Service and its backing endpoints.
+type ServiceInfo struct {
+	Name        string               `json:"name"`
+	Namespace   string               `json:"namespace"`
+	Type        string               `json:"type"` // "ClusterIP", "NodePort", "LoadBalancer", "ExternalName"
+	ClusterIP   string               `json:"cluster_ip,omitempty"`
+	ExternalIPs []string             `json:"external_ips,omitempty"`
+	Selector    map[string]string    `json:"selector,omitempty"`
+	CreatedAt   string               `json:"created_at,omitempty"`
+	Ports       []ServicePortInfo    `json:"ports"`
+	Subsets     []EndpointSubsetInfo `json:"subsets,omitempty"`
 }
 
 // EventInfo represents a normalized event associated with a workload.
@@ -170,6 +220,12 @@ type InfrastructureProvider interface {
 
 	// GetPods lists all pods in the given namespace with container state & resource limits.
 	GetPods(ctx context.Context, namespace string) ([]PodInfo, error)
+
+	// GetServices lists all services in the given namespace with ports, selectors, and endpoints.
+	GetServices(ctx context.Context, namespace string) ([]ServiceInfo, error)
+
+	// GetService returns detailed information for a specific service by name.
+	GetService(ctx context.Context, namespace, name string) (ServiceInfo, error)
 
 	// GetPodEvents lists all events for a specific pod.
 	GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error)

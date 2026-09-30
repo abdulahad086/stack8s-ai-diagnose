@@ -196,6 +196,7 @@ const (
 	SourceContainerLogs   EvidenceSource = "container_logs"
 	SourceNodeStatus      EvidenceSource = "node_status"
 	SourceGPUStatus       EvidenceSource = "gpu_status"
+	SourceServiceStatus   EvidenceSource = "service_status"
 )
 
 type ContainerEvidenceData struct {
@@ -220,6 +221,8 @@ type PodStatusData struct {
 	Namespace  string                  `json:"namespace"`
 	Phase      string                  `json:"phase"`
 	NodeName   string                  `json:"node_name"`
+	PodIP      string                  `json:"pod_ip,omitempty"`
+	Labels     map[string]string       `json:"labels,omitempty"`
 	CreatedAt  string                  `json:"created_at"`
 	Containers []ContainerEvidenceData `json:"containers"`
 }
@@ -245,6 +248,23 @@ type GPUStatusData struct {
 	GPUModel           string `json:"gpu_model,omitempty"`
 	Unavailable        bool   `json:"unavailable,omitempty"`
 	Reason             string `json:"reason,omitempty"`
+}
+
+type ServiceStatusData struct {
+	PodName          string                       `json:"pod_name"`
+	Namespace        string                       `json:"namespace"`
+	ServiceFound     bool                         `json:"service_found"`
+	ServiceName      string                       `json:"service_name,omitempty"`
+	ServiceType      string                       `json:"service_type,omitempty"`
+	ClusterIP        string                       `json:"cluster_ip,omitempty"`
+	ExternalIPs      []string                     `json:"external_ips,omitempty"`
+	Selector         map[string]string            `json:"selector,omitempty"`
+	Ports            []provider.ServicePortInfo   `json:"ports,omitempty"`
+	Endpoints        []provider.EndpointSubsetInfo `json:"endpoints,omitempty"`
+	SelectorMatched  bool                         `json:"selector_matched"`
+	PodInEndpoints   bool                         `json:"pod_in_endpoints"`
+	PodEndpointReady bool                         `json:"pod_endpoint_ready"`
+	Reason           string                       `json:"reason,omitempty"`
 }
 
 type KubernetesEventData struct {
@@ -294,6 +314,18 @@ type EvidencePackage struct {
 	Pods        []PodEvidencePackage `json:"pods"`
 }
 
+func selectorMatchesPod(selector map[string]string, podLabels map[string]string) bool {
+	if len(selector) == 0 {
+		return false
+	}
+	for k, v := range selector {
+		if podLabels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 // buildEvidencePackage assembles unified evidence package consuming InfrastructureProvider.
 func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string) EvidencePackage {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -309,6 +341,9 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 		fmt.Fprintf(os.Stderr, "ERROR: evidence package: failed to list pods: %v\n", err)
 		return pkg
 	}
+
+	// Fetch all services in the namespace for Service/endpoint matching
+	allServices, _ := prov.GetServices(context.TODO(), namespace)
 
 	evidenceCounter := 0
 	nextID := func() string {
@@ -348,6 +383,8 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 			Namespace:  pod.Namespace,
 			Phase:      pod.Phase,
 			NodeName:   pod.NodeName,
+			PodIP:      pod.PodIP,
+			Labels:     pod.Labels,
 			CreatedAt:  pod.CreatedAt,
 			Containers: containers,
 		}
@@ -438,6 +475,64 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 					GPUAvailable:       false,
 					GPUResourceExposed: false,
 					Reason:             "pod has no assigned node (unscheduled)",
+				},
+			})
+		}
+
+		// ── E_svc-type: service_status (Feature 12) ─────────────────────────
+		var matchedServices []provider.ServiceInfo
+		for _, svc := range allServices {
+			if selectorMatchesPod(svc.Selector, pod.Labels) {
+				matchedServices = append(matchedServices, svc)
+			}
+		}
+
+		if len(matchedServices) > 0 {
+			for _, svc := range matchedServices {
+				podInEP := false
+				podEPReady := false
+
+				for _, sub := range svc.Subsets {
+					for _, addr := range sub.Addresses {
+						if (pod.PodIP != "" && addr.IP == pod.PodIP) || (pod.PodName != "" && addr.PodName == pod.PodName) {
+							podInEP = true
+							if addr.Ready {
+								podEPReady = true
+							}
+						}
+					}
+				}
+
+				podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+					ID:     nextID(),
+					Source: SourceServiceStatus,
+					Data: ServiceStatusData{
+						PodName:          pod.PodName,
+						Namespace:        pod.Namespace,
+						ServiceFound:     true,
+						ServiceName:      svc.Name,
+						ServiceType:      svc.Type,
+						ClusterIP:        svc.ClusterIP,
+						ExternalIPs:      svc.ExternalIPs,
+						Selector:         svc.Selector,
+						Ports:            svc.Ports,
+						Endpoints:        svc.Subsets,
+						SelectorMatched:  true,
+						PodInEndpoints:   podInEP,
+						PodEndpointReady: podEPReady,
+					},
+				})
+			}
+		} else {
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceServiceStatus,
+				Data: ServiceStatusData{
+					PodName:         pod.PodName,
+					Namespace:       pod.Namespace,
+					ServiceFound:    false,
+					SelectorMatched: false,
+					Reason:          "no Kubernetes Service selector matches this pod's labels",
 				},
 			})
 		}

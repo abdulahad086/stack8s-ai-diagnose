@@ -371,12 +371,151 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			Namespace:  pod.Namespace,
 			Phase:      string(pod.Status.Phase),
 			NodeName:   nodeName,
+			PodIP:      pod.Status.PodIP,
+			Labels:     pod.Labels,
 			CreatedAt:  pod.CreationTimestamp.Format(time.RFC3339),
 			Containers: containers,
 		})
 	}
 
 	return result, nil
+}
+
+func stringValue(sp *string) string {
+	if sp == nil {
+		return ""
+	}
+	return *sp
+}
+
+// mapServiceInfo converts raw corev1.Service and optional corev1.Endpoints into domain ServiceInfo.
+func mapServiceInfo(service corev1.Service, endpoints *corev1.Endpoints) ServiceInfo {
+	ports := make([]ServicePortInfo, 0, len(service.Spec.Ports))
+	for _, p := range service.Spec.Ports {
+		ports = append(ports, ServicePortInfo{
+			Name:       p.Name,
+			Protocol:   string(p.Protocol),
+			Port:       p.Port,
+			TargetPort: p.TargetPort.String(),
+			NodePort:   p.NodePort,
+		})
+	}
+
+	var subsets []EndpointSubsetInfo
+	if endpoints != nil && len(endpoints.Subsets) > 0 {
+		subsets = make([]EndpointSubsetInfo, 0, len(endpoints.Subsets))
+		for _, sub := range endpoints.Subsets {
+			addrs := make([]EndpointAddressInfo, 0, len(sub.Addresses)+len(sub.NotReadyAddresses))
+			for _, a := range sub.Addresses {
+				targetRef := ""
+				podName := ""
+				if a.TargetRef != nil {
+					targetRef = fmt.Sprintf("%s/%s", a.TargetRef.Kind, a.TargetRef.Name)
+					if a.TargetRef.Kind == "Pod" {
+						podName = a.TargetRef.Name
+					}
+				}
+				addrs = append(addrs, EndpointAddressInfo{
+					IP:        a.IP,
+					NodeName:  stringValue(a.NodeName),
+					PodName:   podName,
+					TargetRef: targetRef,
+					Ready:     true,
+				})
+			}
+			for _, a := range sub.NotReadyAddresses {
+				targetRef := ""
+				podName := ""
+				if a.TargetRef != nil {
+					targetRef = fmt.Sprintf("%s/%s", a.TargetRef.Kind, a.TargetRef.Name)
+					if a.TargetRef.Kind == "Pod" {
+						podName = a.TargetRef.Name
+					}
+				}
+				addrs = append(addrs, EndpointAddressInfo{
+					IP:        a.IP,
+					NodeName:  stringValue(a.NodeName),
+					PodName:   podName,
+					TargetRef: targetRef,
+					Ready:     false,
+				})
+			}
+
+			epPorts := make([]EndpointPortInfo, 0, len(sub.Ports))
+			for _, p := range sub.Ports {
+				epPorts = append(epPorts, EndpointPortInfo{
+					Name:     p.Name,
+					Port:     p.Port,
+					Protocol: string(p.Protocol),
+				})
+			}
+
+			subsets = append(subsets, EndpointSubsetInfo{
+				Addresses:         addrs,
+				Ports:             epPorts,
+				ReadyAddressCount: len(sub.Addresses),
+				NotReadyAddrCount: len(sub.NotReadyAddresses),
+			})
+		}
+	}
+
+	var createdAt string
+	if !service.CreationTimestamp.IsZero() {
+		createdAt = service.CreationTimestamp.Format(time.RFC3339)
+	}
+
+	return ServiceInfo{
+		Name:        service.Name,
+		Namespace:   service.Namespace,
+		Type:        string(service.Spec.Type),
+		ClusterIP:   service.Spec.ClusterIP,
+		ExternalIPs: service.Spec.ExternalIPs,
+		Selector:    service.Spec.Selector,
+		CreatedAt:   createdAt,
+		Ports:       ports,
+		Subsets:     subsets,
+	}
+}
+
+// GetServices lists all services in the namespace and maps them to domain ServiceInfo.
+func (p *LocalKubernetesProvider) GetServices(ctx context.Context, namespace string) ([]ServiceInfo, error) {
+	services, err := p.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeCollectionFailed,
+			Message: fmt.Sprintf("failed to list services in namespace %q", namespace),
+			Err:     err,
+		}
+	}
+
+	endpointsList, _ := p.clientset.CoreV1().Endpoints(namespace).List(ctx, metav1.ListOptions{})
+	epMap := make(map[string]*corev1.Endpoints)
+	if endpointsList != nil {
+		for i := range endpointsList.Items {
+			epMap[endpointsList.Items[i].Name] = &endpointsList.Items[i]
+		}
+	}
+
+	result := make([]ServiceInfo, 0, len(services.Items))
+	for _, svc := range services.Items {
+		ep := epMap[svc.Name]
+		result = append(result, mapServiceInfo(svc, ep))
+	}
+	return result, nil
+}
+
+// GetService returns detailed information for a specific service by name.
+func (p *LocalKubernetesProvider) GetService(ctx context.Context, namespace, name string) (ServiceInfo, error) {
+	svc, err := p.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return ServiceInfo{}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("service %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+	ep, _ := p.clientset.CoreV1().Endpoints(namespace).Get(ctx, name, metav1.GetOptions{})
+	return mapServiceInfo(*svc, ep), nil
 }
 
 // eventTimestamp returns best available event timestamp.

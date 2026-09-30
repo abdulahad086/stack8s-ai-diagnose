@@ -48,6 +48,14 @@ func (s *Stack8sProvider) GetPods(ctx context.Context, namespace string) ([]PodI
 	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }
 
+func (s *Stack8sProvider) GetServices(ctx context.Context, namespace string) ([]ServiceInfo, error) {
+	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetService(ctx context.Context, namespace, name string) (ServiceInfo, error) {
+	return ServiceInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
 func (s *Stack8sProvider) GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error) {
 	return nil, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }

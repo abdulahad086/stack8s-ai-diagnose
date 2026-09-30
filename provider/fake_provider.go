@@ -12,6 +12,7 @@ type FakeProvider struct {
 	NodesData    []NodeInfo
 	GPUNodesData map[string]NodeGPUResources // nodeName -> NodeGPUResources
 	PodsData     map[string][]PodInfo        // namespace -> []PodInfo
+	ServicesData map[string][]ServiceInfo    // namespace -> []ServiceInfo
 	EventsData   map[string][]EventInfo      // podName -> []EventInfo
 	LogsData     map[string]ContainerLogInfo // podName/container -> ContainerLogInfo
 }
@@ -21,6 +22,7 @@ func NewFakeProvider() *FakeProvider {
 		ClusterName:  "https://fake.cluster.local:6443",
 		GPUNodesData: make(map[string]NodeGPUResources),
 		PodsData:     make(map[string][]PodInfo),
+		ServicesData: make(map[string][]ServiceInfo),
 		EventsData:   make(map[string][]EventInfo),
 		LogsData:     make(map[string]ContainerLogInfo),
 	}
@@ -89,6 +91,23 @@ func (f *FakeProvider) GetNodeGPUResources(ctx context.Context, name string) (No
 
 func (f *FakeProvider) GetPods(ctx context.Context, namespace string) ([]PodInfo, error) {
 	return f.PodsData[namespace], nil
+}
+
+func (f *FakeProvider) GetServices(ctx context.Context, namespace string) ([]ServiceInfo, error) {
+	return f.ServicesData[namespace], nil
+}
+
+func (f *FakeProvider) GetService(ctx context.Context, namespace, name string) (ServiceInfo, error) {
+	services := f.ServicesData[namespace]
+	for _, s := range services {
+		if s.Name == name {
+			return s, nil
+		}
+	}
+	return ServiceInfo{}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("service %q not found in namespace %q", name, namespace),
+	}
 }
 
 func (f *FakeProvider) GetPodEvents(ctx context.Context, namespace, podName string) ([]EventInfo, error) {

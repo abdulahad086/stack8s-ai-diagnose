@@ -185,3 +185,53 @@ func TestFakeProviderGPUResources(t *testing.T) {
 		t.Fatalf("expected unscheduled node to return un-exposed GPU, got: %+v", pendingRes)
 	}
 }
+
+func TestFakeProviderServices(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	fake.ServicesData["default"] = []ServiceInfo{
+		{
+			Name:      "web-svc",
+			Namespace: "default",
+			Type:      "ClusterIP",
+			ClusterIP: "10.96.0.100",
+			Selector:  map[string]string{"app": "web"},
+			Ports: []ServicePortInfo{
+				{Name: "http", Protocol: "TCP", Port: 80, TargetPort: "8080"},
+			},
+			Subsets: []EndpointSubsetInfo{
+				{
+					ReadyAddressCount: 1,
+					Addresses: []EndpointAddressInfo{
+						{IP: "10.1.0.15", PodName: "web-pod-1", Ready: true},
+					},
+					Ports: []EndpointPortInfo{
+						{Name: "http", Port: 8080, Protocol: "TCP"},
+					},
+				},
+			},
+		},
+	}
+
+	// 1. GetServices
+	svcs, err := fake.GetServices(ctx, "default")
+	if err != nil || len(svcs) != 1 || svcs[0].Name != "web-svc" {
+		t.Fatalf("unexpected GetServices result: %v, err: %v", svcs, err)
+	}
+	if svcs[0].ClusterIP != "10.96.0.100" || svcs[0].Ports[0].TargetPort != "8080" {
+		t.Fatalf("unexpected ServiceInfo details: %+v", svcs[0])
+	}
+
+	// 2. GetService
+	svc, err := fake.GetService(ctx, "default", "web-svc")
+	if err != nil || svc.Name != "web-svc" {
+		t.Fatalf("unexpected GetService result: %+v, err: %v", svc, err)
+	}
+
+	// 3. GetService missing
+	_, err = fake.GetService(ctx, "default", "non-existent")
+	if err == nil {
+		t.Fatalf("expected error for non-existent service")
+	}
+}

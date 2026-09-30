@@ -469,3 +469,83 @@ func TestBuildEvidencePackage_GPUEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildEvidencePackage_ServiceEvidence(t *testing.T) {
+	fake := provider.NewFakeProvider()
+	fake.NodesData = []provider.NodeInfo{{Name: "node-1", Status: "Ready"}}
+
+	fake.ServicesData["default"] = []provider.ServiceInfo{
+		{
+			Name:      "web-service",
+			Namespace: "default",
+			Type:      "ClusterIP",
+			ClusterIP: "10.96.0.50",
+			Selector:  map[string]string{"app": "web-nginx"},
+			Ports: []provider.ServicePortInfo{
+				{Name: "http", Protocol: "TCP", Port: 80, TargetPort: "80"},
+			},
+			Subsets: []provider.EndpointSubsetInfo{
+				{
+					ReadyAddressCount: 1,
+					Addresses: []provider.EndpointAddressInfo{
+						{IP: "10.1.0.20", PodName: "nginx-pod", Ready: true},
+					},
+					Ports: []provider.EndpointPortInfo{
+						{Name: "http", Port: 80, Protocol: "TCP"},
+					},
+				},
+			},
+		},
+	}
+
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:   "nginx-pod",
+			Namespace: "default",
+			NodeName:  "node-1",
+			PodIP:     "10.1.0.20",
+			Labels:    map[string]string{"app": "web-nginx"},
+		},
+		{
+			PodName:   "standalone-pod",
+			Namespace: "default",
+			NodeName:  "node-1",
+			PodIP:     "10.1.0.21",
+			Labels:    map[string]string{"app": "unmatched-app"},
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+	if len(pkg.Pods) != 2 {
+		t.Fatalf("expected 2 pods in evidence package, got %d", len(pkg.Pods))
+	}
+
+	// 1. Verify nginx-pod service_status
+	var nginxSvcEv *ServiceStatusData
+	for _, ev := range pkg.Pods[0].Evidence {
+		if ev.Source == SourceServiceStatus {
+			if ssd, ok := ev.Data.(ServiceStatusData); ok {
+				nginxSvcEv = &ssd
+			}
+		}
+	}
+	if nginxSvcEv == nil || !nginxSvcEv.ServiceFound || !nginxSvcEv.SelectorMatched || !nginxSvcEv.PodInEndpoints || !nginxSvcEv.PodEndpointReady {
+		t.Fatalf("unexpected service_status evidence for nginx-pod: %+v", nginxSvcEv)
+	}
+	if nginxSvcEv.ServiceName != "web-service" || nginxSvcEv.ClusterIP != "10.96.0.50" {
+		t.Fatalf("unexpected Service details for nginx-pod: %+v", nginxSvcEv)
+	}
+
+	// 2. Verify standalone-pod service_status (no matching service)
+	var standaloneSvcEv *ServiceStatusData
+	for _, ev := range pkg.Pods[1].Evidence {
+		if ev.Source == SourceServiceStatus {
+			if ssd, ok := ev.Data.(ServiceStatusData); ok {
+				standaloneSvcEv = &ssd
+			}
+		}
+	}
+	if standaloneSvcEv == nil || standaloneSvcEv.ServiceFound || standaloneSvcEv.SelectorMatched {
+		t.Fatalf("expected standalone-pod to have service_found=false, got: %+v", standaloneSvcEv)
+	}
+}
+
