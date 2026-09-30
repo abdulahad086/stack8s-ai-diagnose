@@ -530,3 +530,90 @@ Automated Go unit tests (`main_test.go`) verify rule execution:
 
 All test workloads were cleaned up after verification.
 
+---
+
+## Feature 8 — Diagnostic Dataset Builder
+
+> **Feature 8 prepares the dataset. Needle 3 fine-tuning is a later feature.**
+
+### Purpose & Architecture
+
+Feature 8 converts verified Kubernetes diagnostic cases into a machine-readable dataset for future Needle 3 fine-tuning and evaluation.
+
+- **Conceptual Separation:** Training data teaches diagnostic tool selection and argument extraction. Runtime evidence comes from actual Kubernetes cluster collectors.
+- **Dataset Location:** Files are generated under `dataset/` (`tools.json`, `train.jsonl`, `validation.jsonl`, `test.jsonl`, `README.md`).
+
+### Official Needle 3 JSONL Format
+
+Each record in `train.jsonl`, `validation.jsonl`, and `test.jsonl` follows the official Needle schema:
+
+```json
+{
+  "query": "Why is pod test-image-failure failing in namespace default?",
+  "tools": [ ... ],
+  "answers": [
+    {
+      "name": "get_pod_status",
+      "arguments": {
+        "namespace": "default",
+        "pod": "test-image-failure"
+      }
+    },
+    {
+      "name": "get_pod_events",
+      "arguments": {
+        "namespace": "default",
+        "pod": "test-image-failure"
+      }
+    },
+    {
+      "name": "get_container_logs",
+      "arguments": {
+        "container": "app",
+        "namespace": "default",
+        "pod": "test-image-failure"
+      }
+    }
+  ],
+  "reasoning": "The pod name 'test-image-failure', namespace 'default', and container 'app' are explicitly specified in the query."
+}
+```
+
+### Diagnostic Tools (`dataset/tools.json`)
+
+Tools represent implemented collectors only:
+1. `get_pod_status` (required: `namespace`, `pod`)
+2. `get_pod_events` (required: `namespace`, `pod`)
+3. `get_container_logs` (required: `namespace`, `pod`, `container`)
+
+### Grounding Rules & Secret Redaction
+
+- **Strict Grounding:** Tool call arguments must be derived from the query context. Placeholders like `<pod_name>` or `TODO` are prohibited.
+- **Secret Redaction:** Passwords, tokens, API keys, and certificate strings are scanned and redacted (`[REDACTED]`).
+
+### Dataset Splits & Data Leakage Prevention
+
+| Split | File | Count | Percentage |
+|-------|------|-------|------------|
+| **Train** | `dataset/train.jsonl` | 17 | 63.0% |
+| **Validation** | `dataset/validation.jsonl` | 5 | 18.5% |
+| **Holdout Test** | `dataset/test.jsonl` | 5 | 18.5% |
+
+**Leakage Prevention:** Split strictly by incident/pod context. Holdout test set (`dataset/test.jsonl`) contains unseen pod names (`invoice-generator`, `search-indexer-pod`, `metrics-exporter`), unseen namespaces (`production-eu`, `billing-v2`), and novel phrasings.
+
+### UNKNOWN & Negative Examples
+
+- **Negative Examples (`answers: []`):** Teach the model not to trigger tool calls on general inquiries or non-diagnostic statements.
+- **UNKNOWN Cases:** Ground-truth cases where evidence is insufficient map to `UNKNOWN`.
+
+### Dataset Validation & Statistics
+
+Integrated into Go test suite (`dataset_test.go` and `dataset_builder.go`):
+- Total Examples: 27
+- Real Verified Cases: 4
+- Synthetic Grounded Cases: 23
+- Negative Cases (`answers: []`): 5
+- UNKNOWN Diagnostic Cases: 6
+- Validation & Leakage Check: PASSED ✅
+
+

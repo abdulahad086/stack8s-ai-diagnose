@@ -1002,5 +1002,11 @@ func main() {
 	// Feature 7: deterministic diagnosis engine
 	diagReport := diagnoseEvidence(pkg)
 	printDiagnosisSummary(diagReport)
+
+	// Feature 8: diagnostic dataset builder
+	generateDatasets()
+	total, splitCounts, emptyAns, unknownDiag, realCount, reasoningCount := validateDatasets()
+	printDatasetReport(total, splitCounts, emptyAns, unknownDiag, realCount, reasoningCount)
 }
+
 

@@ -1,0 +1,74 @@
+[
+  {
+    "name": "get_pod_status",
+    "description": "Retrieve current status, phase, container states, ready conditions, and restart counts for a Kubernetes Pod.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "The Kubernetes namespace of the target pod."
+        },
+        "pod": {
+          "type": "string",
+          "description": "The name of the target pod."
+        }
+      },
+      "required": [
+        "namespace",
+        "pod"
+      ]
+    }
+  },
+  {
+    "name": "get_pod_events",
+    "description": "Retrieve chronological Kubernetes Events associated with a specific Pod to inspect scheduling, image pulling, and lifecycle errors.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "The Kubernetes namespace of the target pod."
+        },
+        "pod": {
+          "type": "string",
+          "description": "The name of the target pod."
+        }
+      },
+      "required": [
+        "namespace",
+        "pod"
+      ]
+    }
+  },
+  {
+    "name": "get_container_logs",
+    "description": "Retrieve recent log output lines from a specific container running inside a Kubernetes Pod.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string",
+          "description": "The name of the container within the pod."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "The Kubernetes namespace of the target pod."
+        },
+        "pod": {
+          "type": "string",
+          "description": "The name of the target pod."
+        },
+        "tail_lines": {
+          "type": "integer",
+          "description": "Maximum number of recent log lines to retrieve (default: 100)."
+        }
+      },
+      "required": [
+        "namespace",
+        "pod",
+        "container"
+      ]
+    }
+  }
+]
