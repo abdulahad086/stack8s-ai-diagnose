@@ -311,3 +311,139 @@ kubectl delete pod test-nginx test-logger -n default
 ```bash
 go mod tidy
 ```
+
+---
+
+## Feature 6 — Controlled ImagePullBackOff Failure Test
+
+> **This is a controlled local test. It is not an AI diagnosis.**
+
+### Why controlled failures are useful
+
+Before trusting a diagnostic pipeline in production, it must be verified against known, observable failure modes. Feature 6 creates one harmless, reproducible failure locally and confirms that the existing evidence collectors (F2 Pod status, F3 Events, F4 Logs, F5 Evidence Package) capture it correctly — with no invented data.
+
+### Test workload
+
+| Property | Value |
+|----------|-------|
+| Pod name | `test-image-failure` |
+| Namespace | `default` |
+| Container | `app` |
+| Image | `stack8s-demo/nonexistent-image:does-not-exist` |
+| Restart policy | `Never` |
+| Privileged | No |
+| Host network | No |
+| Mounts | None |
+| Secrets accessed | None |
+| Intended failure | Image pull failure only |
+
+### Expected Kubernetes behaviour
+
+```
+Pod scheduled → Image pull attempted → Pull fails (repo does not exist)
+→ ErrImagePull → ImagePullBackOff → Pod stays Pending
+```
+
+### Actual observed Pod state (kubectl)
+
+```
+NAME                 READY   STATUS           RESTARTS   AGE
+test-image-failure   0/1     ErrImagePull     0          2m11s
+```
+
+Container state from `kubectl describe`:
+```
+State:    Waiting
+  Reason: ErrImagePull
+Ready:    False
+```
+
+### Actual observed Events (kubectl describe)
+
+```
+Type     Reason     Age                  From               Message
+----     ------     ----                 ----               -------
+Normal   Scheduled  2m11s                default-scheduler  Successfully assigned default/test-image-failure to docker-desktop
+Warning  Failed     39s (x6 over 2m3s)  kubelet            Error: ImagePullBackOff
+Normal   Pulling    26s (x4 over 2m5s)  kubelet            Pulling image "stack8s-demo/nonexistent-image:does-not-exist"
+Warning  Failed     25s (x4 over 2m3s)  kubelet            Failed to pull image "stack8s-demo/nonexistent-image:does-not-exist": Error response from daemon: pull access denied for stack8s-demo/nonexistent-image, repository does not exist or may require 'docker login'
+Warning  Failed     25s (x4 over 2m3s)  kubelet            Error: ErrImagePull
+Normal   BackOff    9s  (x7 over 2m3s)  kubelet            Back-off pulling image "stack8s-demo/nonexistent-image:does-not-exist"
+```
+
+### Container log behaviour
+
+Because the container never started (image was never pulled), no container logs exist. The Go collector correctly reported:
+
+```json
+{
+  "unavailable": true,
+  "unavailable_reason": "container not yet started",
+  "api_error": false,
+  "lines_retrieved": 0
+}
+```
+
+This correctly distinguishes **"no logs because container never started"** from **"log API call failed"**. No fake logs were inserted.
+
+### Evidence Package result (Go collector)
+
+```
+Evidence Count: 8  (for test-image-failure alone)
+
+  Pod: test-image-failure
+    E1 → pod_status
+    E2 → kubernetes_event   (Scheduled)
+    E3 → kubernetes_event   (Failed / ImagePullBackOff)
+    E4 → kubernetes_event   (Pulling)
+    E5 → kubernetes_event   (Failed / pull access denied)
+    E6 → kubernetes_event   (Failed / ErrImagePull)
+    E7 → kubernetes_event   (BackOff)
+    E8 → container_logs     (unavailable: container not yet started)
+```
+
+Captured in `pod_status` evidence (E1):
+```json
+{
+  "phase": "Pending",
+  "containers": [{
+    "name": "app",
+    "image": "stack8s-demo/nonexistent-image:does-not-exist",
+    "ready": false,
+    "restart_count": 0,
+    "state": "Waiting (ImagePullBackOff: Back-off pulling image \"stack8s-demo/nonexistent-image:does-not-exist\")"
+  }]
+}
+```
+
+### kubectl comparison
+
+| Field | kubectl | Go collector |
+|-------|---------|-------------|
+| Phase | Pending | Pending ✅ |
+| Container state | Waiting / ErrImagePull | Waiting (ImagePullBackOff) ✅ |
+| Image | `stack8s-demo/nonexistent-image:does-not-exist` | identical ✅ |
+| Ready | False | false ✅ |
+| Restart count | 0 | 0 ✅ |
+| Events collected | 6 distinct event entries | 6 evidence items E2–E7 ✅ |
+| Log availability | N/A (never started) | unavailable, api_error=false ✅ |
+
+### Unaffected workloads confirmed
+
+`kubectl get pods -A` after test confirmed:
+
+| Pod | Namespace | Status |
+|-----|-----------|--------|
+| `test-nginx` | default | Running ✅ unaffected |
+| `test-logger` | default | Completed ✅ unaffected |
+| All `kube-system` pods | kube-system | Running ✅ unaffected |
+
+### Cleanup
+
+The `test-image-failure` pod was deleted after testing:
+
+```bash
+kubectl delete pod test-image-failure -n default
+```
+
+Confirmed removed. Only `test-nginx` and `test-logger` remain.
