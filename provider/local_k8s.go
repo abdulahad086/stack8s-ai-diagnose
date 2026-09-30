@@ -407,17 +407,125 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			})
 		}
 
+		// ── Feature 15: configuration/identity references ─────────────────
+		// Collect env references (configMapKeyRef, secretKeyRef, envFrom)
+		var envRefs []EnvVarRef
+		for _, c := range pod.Spec.Containers {
+			// Individual env vars sourced from ConfigMap or Secret
+			for _, e := range c.Env {
+				if e.ValueFrom == nil {
+					continue
+				}
+				if e.ValueFrom.ConfigMapKeyRef != nil {
+					opt := false
+					if e.ValueFrom.ConfigMapKeyRef.Optional != nil {
+						opt = *e.ValueFrom.ConfigMapKeyRef.Optional
+					}
+					envRefs = append(envRefs, EnvVarRef{
+						ContainerName: c.Name,
+						EnvName:       e.Name,
+						SourceType:    "configMapKeyRef",
+						ResourceName:  e.ValueFrom.ConfigMapKeyRef.Name,
+						ResourceKey:   e.ValueFrom.ConfigMapKeyRef.Key,
+						Optional:      opt,
+					})
+				}
+				if e.ValueFrom.SecretKeyRef != nil {
+					opt := false
+					if e.ValueFrom.SecretKeyRef.Optional != nil {
+						opt = *e.ValueFrom.SecretKeyRef.Optional
+					}
+					envRefs = append(envRefs, EnvVarRef{
+						ContainerName: c.Name,
+						EnvName:       e.Name,
+						SourceType:    "secretKeyRef",
+						ResourceName:  e.ValueFrom.SecretKeyRef.Name,
+						ResourceKey:   e.ValueFrom.SecretKeyRef.Key,
+						Optional:      opt,
+					})
+				}
+			}
+			// envFrom sources
+			for _, ef := range c.EnvFrom {
+				if ef.ConfigMapRef != nil {
+					opt := false
+					if ef.ConfigMapRef.Optional != nil {
+						opt = *ef.ConfigMapRef.Optional
+					}
+					envRefs = append(envRefs, EnvVarRef{
+						ContainerName: c.Name,
+						EnvName:       "(envFrom)",
+						SourceType:    "configMapEnvFrom",
+						ResourceName:  ef.ConfigMapRef.Name,
+						Optional:      opt,
+					})
+				}
+				if ef.SecretRef != nil {
+					opt := false
+					if ef.SecretRef.Optional != nil {
+						opt = *ef.SecretRef.Optional
+					}
+					envRefs = append(envRefs, EnvVarRef{
+						ContainerName: c.Name,
+						EnvName:       "(envFrom)",
+						SourceType:    "secretEnvFrom",
+						ResourceName:  ef.SecretRef.Name,
+						Optional:      opt,
+					})
+				}
+			}
+		}
+
+		// Collect ConfigMap and Secret volume references
+		var configVolRefs []ConfigVolumeRef
+		for _, v := range pod.Spec.Volumes {
+			if v.ConfigMap != nil {
+				opt := false
+				if v.ConfigMap.Optional != nil {
+					opt = *v.ConfigMap.Optional
+				}
+				configVolRefs = append(configVolRefs, ConfigVolumeRef{
+					VolumeName:   v.Name,
+					SourceType:   "configMap",
+					ResourceName: v.ConfigMap.Name,
+					Optional:     opt,
+				})
+			}
+			if v.Secret != nil {
+				opt := false
+				if v.Secret.Optional != nil {
+					opt = *v.Secret.Optional
+				}
+				configVolRefs = append(configVolRefs, ConfigVolumeRef{
+					VolumeName:   v.Name,
+					SourceType:   "secret",
+					ResourceName: v.Secret.SecretName,
+					Optional:     opt,
+				})
+			}
+		}
+
+		// Collect imagePullSecret names
+		var ipsNames []string
+		for _, ips := range pod.Spec.ImagePullSecrets {
+			ipsNames = append(ipsNames, ips.Name)
+		}
+
 		result = append(result, PodInfo{
-			PodName:         pod.Name,
-			Namespace:       pod.Namespace,
-			Phase:           string(pod.Status.Phase),
-			NodeName:        nodeName,
-			PodIP:           pod.Status.PodIP,
-			Labels:          pod.Labels,
-			CreatedAt:       pod.CreationTimestamp.Format(time.RFC3339),
-			OwnerReferences: ownerRefs,
-			Volumes:         volumes,
-			Containers:      containers,
+			PodName:              pod.Name,
+			Namespace:            pod.Namespace,
+			Phase:                string(pod.Status.Phase),
+			NodeName:             nodeName,
+			PodIP:                pod.Status.PodIP,
+			Labels:               pod.Labels,
+			CreatedAt:            pod.CreationTimestamp.Format(time.RFC3339),
+			OwnerReferences:      ownerRefs,
+			Volumes:              volumes,
+			Containers:           containers,
+			ServiceAccountName:   pod.Spec.ServiceAccountName,
+			ImagePullSecretNames: ipsNames,
+			EnvRefs:              envRefs,
+			ConfigVolumeRefs:     configVolRefs,
 		})
 	}
 
@@ -1151,4 +1259,136 @@ func (p *LocalKubernetesProvider) GetCronJob(ctx context.Context, namespace, nam
 		}
 	}
 	return mapCronJobInfo(*cj), nil
+}
+
+// ── Configuration & Identity Provider Methods (Feature 15) ───────────────────
+
+// GetConfigMap returns ConfigMap metadata and key names. Values are NOT collected.
+func (p *LocalKubernetesProvider) GetConfigMap(ctx context.Context, namespace, name string) (ConfigMapInfo, error) {
+	cm, err := p.clientset.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return ConfigMapInfo{
+			Name:        name,
+			Namespace:   namespace,
+			Unavailable: true,
+			Reason:      err.Error(),
+		}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("configmap %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+
+	// Collect key names only — never values.
+	keys := make([]string, 0, len(cm.Data)+len(cm.BinaryData))
+	for k := range cm.Data {
+		keys = append(keys, k)
+	}
+	for k := range cm.BinaryData {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	immutable := false
+	if cm.Immutable != nil {
+		immutable = *cm.Immutable
+	}
+
+	var createdAt string
+	if !cm.CreationTimestamp.IsZero() {
+		createdAt = cm.CreationTimestamp.Format(time.RFC3339)
+	}
+
+	return ConfigMapInfo{
+		Name:      cm.Name,
+		Namespace: cm.Namespace,
+		Keys:      keys,
+		Immutable: immutable,
+		CreatedAt: createdAt,
+	}, nil
+}
+
+// GetSecretMetadata returns Secret metadata and key names ONLY.
+// SECRET VALUES ARE NEVER RETURNED. The .Data map values are discarded immediately;
+// only the key names (map keys) are extracted.
+func (p *LocalKubernetesProvider) GetSecretMetadata(ctx context.Context, namespace, name string) (SecretInfo, error) {
+	secret, err := p.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return SecretInfo{
+			Name:            name,
+			Namespace:       namespace,
+			Unavailable:     true,
+			Reason:          err.Error(),
+			ValuesCollected: false,
+		}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("secret %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+
+	// Extract key NAMES only — discard all byte-slice values immediately.
+	keys := make([]string, 0, len(secret.Data))
+	for k := range secret.Data {
+		keys = append(keys, k) // only the key name string is kept
+	}
+	sort.Strings(keys)
+	// Explicitly nil out the data fields to ensure values cannot leak.
+	secret.Data = nil
+	secret.StringData = nil
+
+	immutable := false
+	if secret.Immutable != nil {
+		immutable = *secret.Immutable
+	}
+
+	var createdAt string
+	if !secret.CreationTimestamp.IsZero() {
+		createdAt = secret.CreationTimestamp.Format(time.RFC3339)
+	}
+
+	return SecretInfo{
+		Name:            secret.Name,
+		Namespace:       secret.Namespace,
+		Type:            string(secret.Type),
+		Keys:            keys,
+		Immutable:       immutable,
+		CreatedAt:       createdAt,
+		ValuesCollected: false, // always false — security boundary
+	}, nil
+}
+
+// GetServiceAccount returns ServiceAccount metadata for a given namespace and name.
+func (p *LocalKubernetesProvider) GetServiceAccount(ctx context.Context, namespace, name string) (ServiceAccountInfo, error) {
+	sa, err := p.clientset.CoreV1().ServiceAccounts(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return ServiceAccountInfo{
+			Name:        name,
+			Namespace:   namespace,
+			Unavailable: true,
+			Reason:      err.Error(),
+		}, &ProviderError{
+			Code:    ErrCodeResourceNotFound,
+			Message: fmt.Sprintf("serviceaccount %q not found in namespace %q", name, namespace),
+			Err:     err,
+		}
+	}
+
+	ipsNames := make([]string, 0, len(sa.ImagePullSecrets))
+	for _, ips := range sa.ImagePullSecrets {
+		ipsNames = append(ipsNames, ips.Name)
+	}
+
+	var createdAt string
+	if !sa.CreationTimestamp.IsZero() {
+		createdAt = sa.CreationTimestamp.Format(time.RFC3339)
+	}
+
+	return ServiceAccountInfo{
+		Name:                      sa.Name,
+		Namespace:                 sa.Namespace,
+		ImagePullSecrets:          ipsNames,
+		AutomountServiceAcctToken: sa.AutomountServiceAccountToken,
+		CreatedAt:                 createdAt,
+	}, nil
 }

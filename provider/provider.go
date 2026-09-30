@@ -92,18 +92,82 @@ type PodVolumeInfo struct {
 	ReadOnly  bool   `json:"read_only,omitempty"`
 }
 
+// EnvVarRef represents a single environment variable whose value is sourced
+// from a ConfigMap or Secret reference. Values are NEVER collected.
+type EnvVarRef struct {
+	ContainerName string `json:"container_name"`
+	EnvName       string `json:"env_name"`
+	SourceType    string `json:"source_type"`  // "configMapKeyRef", "secretKeyRef", "configMapEnvFrom", "secretEnvFrom"
+	ResourceName  string `json:"resource_name"` // ConfigMap or Secret name
+	ResourceKey   string `json:"resource_key,omitempty"` // specific key (empty for envFrom)
+	Optional      bool   `json:"optional,omitempty"`
+}
+
+// ConfigVolumeRef represents a volume in a Pod backed by a ConfigMap or Secret.
+type ConfigVolumeRef struct {
+	VolumeName   string `json:"volume_name"`
+	SourceType   string `json:"source_type"`   // "configMap" or "secret"
+	ResourceName string `json:"resource_name"` // ConfigMap or Secret name
+	Optional     bool   `json:"optional,omitempty"`
+}
+
 // PodInfo represents the status, networking, storage volumes, owner references, and containers of a single pod.
 type PodInfo struct {
-	PodName         string               `json:"pod_name"`
-	Namespace       string               `json:"namespace"`
-	Phase           string               `json:"phase"`
-	NodeName        string               `json:"node_name"`
-	PodIP           string               `json:"pod_ip,omitempty"`
-	Labels          map[string]string    `json:"labels,omitempty"`
-	CreatedAt       string               `json:"created_at"`
-	OwnerReferences []OwnerReferenceInfo `json:"owner_references,omitempty"`
-	Volumes         []PodVolumeInfo      `json:"volumes,omitempty"`
-	Containers      []ContainerInfo      `json:"containers"`
+	PodName              string               `json:"pod_name"`
+	Namespace            string               `json:"namespace"`
+	Phase                string               `json:"phase"`
+	NodeName             string               `json:"node_name"`
+	PodIP                string               `json:"pod_ip,omitempty"`
+	Labels               map[string]string    `json:"labels,omitempty"`
+	CreatedAt            string               `json:"created_at"`
+	OwnerReferences      []OwnerReferenceInfo `json:"owner_references,omitempty"`
+	Volumes              []PodVolumeInfo      `json:"volumes,omitempty"`
+	Containers           []ContainerInfo      `json:"containers"`
+	// Feature 15: configuration/identity references
+	ServiceAccountName   string               `json:"service_account_name,omitempty"`
+	ImagePullSecretNames []string             `json:"image_pull_secret_names,omitempty"`
+	EnvRefs              []EnvVarRef          `json:"env_refs,omitempty"`
+	ConfigVolumeRefs     []ConfigVolumeRef    `json:"config_volume_refs,omitempty"`
+}
+
+// ── Configuration & Identity Domain Types (Feature 15) ──────────────────────
+
+// ConfigMapInfo holds ConfigMap metadata and key names.
+// ConfigMap values are intentionally NOT collected.
+type ConfigMapInfo struct {
+	Name        string   `json:"name"`
+	Namespace   string   `json:"namespace"`
+	Keys        []string `json:"keys,omitempty"`
+	Immutable   bool     `json:"immutable,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	Unavailable bool     `json:"unavailable,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+}
+
+// SecretInfo holds Secret metadata and key names ONLY.
+// SECRET VALUES ARE NEVER COLLECTED — not in data, not in stringData, not anywhere.
+type SecretInfo struct {
+	Name        string   `json:"name"`
+	Namespace   string   `json:"namespace"`
+	Type        string   `json:"type,omitempty"` // e.g. "Opaque", "kubernetes.io/dockerconfigjson"
+	Keys        []string `json:"keys,omitempty"` // key NAMES only — values never collected
+	Immutable   bool     `json:"immutable,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	Unavailable bool     `json:"unavailable,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+	// ValuesCollected is always false — included explicitly to document the security boundary.
+	ValuesCollected bool `json:"values_collected"`
+}
+
+// ServiceAccountInfo holds a Kubernetes ServiceAccount metadata.
+type ServiceAccountInfo struct {
+	Name                     string   `json:"name"`
+	Namespace                string   `json:"namespace"`
+	ImagePullSecrets         []string `json:"image_pull_secrets,omitempty"` // secret names referenced by SA
+	AutomountServiceAcctToken *bool   `json:"automount_service_account_token,omitempty"`
+	CreatedAt                string   `json:"created_at,omitempty"`
+	Unavailable              bool     `json:"unavailable,omitempty"`
+	Reason                   string   `json:"reason,omitempty"`
 }
 
 // ── Workload & Controller Domain Types (Feature 14) ──────────────────────────
@@ -436,4 +500,13 @@ type InfrastructureProvider interface {
 
 	// GetContainerLogs retrieves logs for a container in a pod bounded by tailLines.
 	GetContainerLogs(ctx context.Context, namespace, podName, containerName string, tailLines int64) (ContainerLogInfo, error)
+
+	// GetConfigMap returns ConfigMap metadata and key names (NOT values) for a ConfigMap in a namespace.
+	GetConfigMap(ctx context.Context, namespace, name string) (ConfigMapInfo, error)
+
+	// GetSecretMetadata returns Secret metadata and key names ONLY. Secret values are NEVER returned.
+	GetSecretMetadata(ctx context.Context, namespace, name string) (SecretInfo, error)
+
+	// GetServiceAccount returns ServiceAccount metadata for a given namespace and name.
+	GetServiceAccount(ctx context.Context, namespace, name string) (ServiceAccountInfo, error)
 }

@@ -898,6 +898,59 @@ Workload evidence is attached to the `EvidencePackage` as `workload_status` evid
 
 ---
 
+## Feature 15 — Configuration & Identity Evidence Collector
+
+> **"Feature 15 observes Kubernetes configuration references and identity metadata. It NEVER inspects secret payloads, raw secret data, or application settings."**
+
+### Purpose & Scope
+
+Feature 15 extends the provider abstraction and unified evidence package to inspect configuration references (ConfigMaps, Secrets metadata, and env var references) and identity resources (ServiceAccounts, ImagePullSecrets) for target Pods.
+
+### Extended Provider Interface & Types
+
+Added to `provider.InfrastructureProvider`:
+- `GetConfigMap(ctx, namespace, name) (ConfigMapInfo, error)`
+- `GetSecretMetadata(ctx, namespace, name) (SecretInfo, error)`
+- `GetServiceAccount(ctx, namespace, name) (ServiceAccountInfo, error)`
+
+Domain Types:
+- `ConfigMapInfo`: `Name`, `Namespace`, `Keys`, `CreatedAt`, `Unavailable`, `Reason`.
+- `SecretInfo`: `Name`, `Namespace`, `Type`, `Keys`, `CreatedAt`, `Unavailable`, `Reason`.
+- `ServiceAccountInfo`: `Name`, `Namespace`, `Secrets`, `ImagePullSecrets`, `AutomountServiceAccountToken`, `CreatedAt`, `Unavailable`, `Reason`.
+- `EnvVarRef`: `ContainerName`, `EnvName`, `SourceType` (`configMapKeyRef`, `secretKeyRef`, `configMapEnvFrom`, `secretEnvFrom`), `ResourceName`, `Key`, `Optional`.
+
+### Strict Security Boundary
+
+- **Secret Metadata Only:** For Secrets, only metadata (`Name`, `Namespace`, `Type`, `Keys` - list of key names) is collected.
+- **Zero Raw Data:** `data`, `stringData`, or binary secret contents are NEVER fetched, read, stored, or output.
+- **Environment Variable Values:** Environment variable values are never collected or logged — only the key reference metadata is recorded.
+
+### Evidence Package Integration (`configuration_status`)
+
+Configuration and identity evidence is attached to the `EvidencePackage` as `configuration_status` evidence items for each pod:
+
+- **Referenced ConfigMaps:** Checks existence of volumes and container environment variable key references (`configMapKeyRef`, `configMapEnvFrom`), verifying if target key names exist in the ConfigMap.
+- **Referenced Secrets:** Checks metadata existence of volumes and container secret key references (`secretKeyRef`, `secretEnvFrom`), verifying if target key names exist in the Secret metadata without reading payload data.
+- **ServiceAccount & Token Auto-mount:** Traces Pod ServiceAccount, checking existence, associated Secrets/ImagePullSecrets, and `automountServiceAccountToken` flag.
+- **Image Pull Secrets:** Validates existence of all `imagePullSecrets` declared on the Pod spec.
+- **Missing Configuration Handling:** Missing ConfigMaps, Secrets, or ServiceAccounts report `found: false` and `unavailable: true` with the precise Kubernetes API error reason without crashing or halting evidence collection.
+
+### Controlled Cluster Verification
+
+1. **Healthy Configuration & Identity Test (`f15-healthy`):** Created `f15-sa`, `f15-pull-secret`, `f15-cm`, `f15-secret`, and `f15-healthy-pod`. Verified `configuration_status` evidence matched `kubectl`:
+   - ConfigMap: `f15-cm` found, key `app.properties` present.
+   - Secret: `f15-secret` found, key `api-key` present, `Type: Opaque`. Raw data was strictly uncollected.
+   - ServiceAccount: `f15-sa` found, `automountServiceAccountToken: true`.
+   - ImagePullSecret: `f15-pull-secret` found.
+2. **Missing Configuration & Identity Test (`f15-missing`):** Created `f15-missing-pod` referencing missing resources and missing keys. Verified `configuration_status` evidence matched `kubectl`:
+   - ConfigMap: `f15-cm-missing` marked `found: false`, `unavailable: true`.
+   - Secret: `f15-secret-missing` marked `found: false`, `unavailable: true`.
+   - Secret Key Reference: `missing_key` in `f15-secret` marked `key_present: false`.
+   - ServiceAccount: `f15-sa-missing` marked `found: false`, `unavailable: true`.
+   - ImagePullSecret: `f15-pull-secret-missing` marked `found: false`, `unavailable: true`.
+3. **Cleanup:** All temporary test manifests (`testdata/f15-healthy.yaml`, `testdata/f15-missing.yaml`) were cleaned up.
+
+
 
 
 

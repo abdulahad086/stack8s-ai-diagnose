@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-partial-config
+  namespace: default
+  labels:
+    feature: f15-test
+data:
+  APP_MODE: "test"
+---
+# Pod referencing APP_MODE (exists) and MISSING_KEY (does not exist in ConfigMap)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-f15-missing-key
+  namespace: default
+  labels:
+    feature: f15-test
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "16Mi"
+      limits:
+        cpu: "100m"
+        memory: "32Mi"
+    env:
+    - name: APP_MODE
+      valueFrom:
+        configMapKeyRef:
+          name: test-partial-config
+          key: APP_MODE
+    - name: MISSING_KEY
+      valueFrom:
+        configMapKeyRef:
+          name: test-partial-config
+          key: MISSING_KEY
+          optional: true
+---
+# Pod referencing a Secret that does not exist
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-f15-missing-secret
+  namespace: default
+  labels:
+    feature: f15-test
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "16Mi"
+      limits:
+        cpu: "100m"
+        memory: "32Mi"
+    env:
+    - name: DB_PASS
+      valueFrom:
+        secretKeyRef:
+          name: test-nonexistent-secret
+          key: DATABASE_PASSWORD
+          optional: true

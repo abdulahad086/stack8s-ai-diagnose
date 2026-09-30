@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -433,3 +434,207 @@ func TestFakeProviderWorkloads(t *testing.T) {
 	}
 }
 
+// ── Feature 15: Configuration & Identity Provider Tests ──────────────────────
+
+func TestFakeProviderConfigMapMetadata(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	fake.ConfigMapsData["default"] = map[string]ConfigMapInfo{
+		"app-config": {
+			Name:      "app-config",
+			Namespace: "default",
+			Keys:      []string{"APP_MODE", "APP_PORT", "DB_HOST"},
+			CreatedAt: "2026-09-30T10:00:00Z",
+		},
+	}
+
+	// 1. Existing ConfigMap — keys present, no values
+	cm, err := fake.GetConfigMap(ctx, "default", "app-config")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cm.Name != "app-config" || cm.Unavailable {
+		t.Fatalf("expected existing ConfigMap, got: %+v", cm)
+	}
+	if len(cm.Keys) != 3 {
+		t.Fatalf("expected 3 keys, got %d: %v", len(cm.Keys), cm.Keys)
+	}
+	keySet := make(map[string]bool)
+	for _, k := range cm.Keys {
+		keySet[k] = true
+	}
+	for _, expected := range []string{"APP_MODE", "APP_PORT", "DB_HOST"} {
+		if !keySet[expected] {
+			t.Fatalf("missing expected key %q in ConfigMap keys: %v", expected, cm.Keys)
+		}
+	}
+
+	// 2. Missing ConfigMap
+	missing, err := fake.GetConfigMap(ctx, "default", "missing-config")
+	if err == nil {
+		t.Fatalf("expected error for missing ConfigMap")
+	}
+	if !missing.Unavailable {
+		t.Fatalf("expected Unavailable=true for missing ConfigMap, got: %+v", missing)
+	}
+}
+
+func TestFakeProviderConfigMapKeyExistence(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	fake.ConfigMapsData["default"] = map[string]ConfigMapInfo{
+		"partial-config": {
+			Name:      "partial-config",
+			Namespace: "default",
+			Keys:      []string{"APP_MODE"}, // only APP_MODE, not MISSING_KEY
+		},
+	}
+
+	cm, err := fake.GetConfigMap(ctx, "default", "partial-config")
+	if err != nil || cm.Unavailable {
+		t.Fatalf("expected existing ConfigMap: %+v, err: %v", cm, err)
+	}
+
+	// APP_MODE must be present
+	found := false
+	for _, k := range cm.Keys {
+		if k == "APP_MODE" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("APP_MODE key not found in %v", cm.Keys)
+	}
+
+	// MISSING_KEY must NOT appear
+	for _, k := range cm.Keys {
+		if k == "MISSING_KEY" {
+			t.Fatalf("MISSING_KEY should not be in ConfigMap keys")
+		}
+	}
+}
+
+func TestFakeProviderSecretMetadataOnly(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	fake.SecretsData["default"] = map[string]SecretInfo{
+		"db-secret": {
+			Name:            "db-secret",
+			Namespace:       "default",
+			Type:            "Opaque",
+			Keys:            []string{"DATABASE_PASSWORD", "DATABASE_USER"},
+			ValuesCollected: false,
+			CreatedAt:       "2026-09-30T10:00:00Z",
+		},
+	}
+
+	// 1. Existing Secret — key names only, values never
+	sec, err := fake.GetSecretMetadata(ctx, "default", "db-secret")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sec.Name != "db-secret" || sec.Unavailable {
+		t.Fatalf("expected existing Secret, got: %+v", sec)
+	}
+	if len(sec.Keys) != 2 {
+		t.Fatalf("expected 2 keys, got %d: %v", len(sec.Keys), sec.Keys)
+	}
+	// CRITICAL: ValuesCollected must always be false
+	if sec.ValuesCollected {
+		t.Fatalf("SECURITY VIOLATION: ValuesCollected must be false, got true")
+	}
+
+	// 2. Missing Secret
+	missing, err := fake.GetSecretMetadata(ctx, "default", "missing-secret")
+	if err == nil {
+		t.Fatalf("expected error for missing Secret")
+	}
+	if !missing.Unavailable {
+		t.Fatalf("expected Unavailable=true for missing Secret")
+	}
+	if missing.ValuesCollected {
+		t.Fatalf("SECURITY VIOLATION: ValuesCollected must be false even for missing Secret")
+	}
+}
+
+func TestFakeProviderSecretValuesNeverLeaked(t *testing.T) {
+	// Mandatory security test: sentinel value must NEVER appear in any provider output.
+	sentinel := "DO_NOT_LEAK_THIS_SECRET_12345"
+
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	// Store ONLY a key NAME — the sentinel value itself must NOT be in fixture data
+	fake.SecretsData["default"] = map[string]SecretInfo{
+		"leak-test-secret": {
+			Name:            "leak-test-secret",
+			Namespace:       "default",
+			Type:            "Opaque",
+			Keys:            []string{"SENTINEL_KEY"}, // key NAME only
+			ValuesCollected: false,
+		},
+	}
+
+	sec, err := fake.GetSecretMetadata(ctx, "default", "leak-test-secret")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Check that sentinel never appears anywhere in SecretInfo output
+	for _, k := range sec.Keys {
+		if strings.Contains(k, sentinel) {
+			t.Fatalf("SECURITY VIOLATION: sentinel found in key name: %q", k)
+		}
+	}
+	for _, field := range []string{sec.Name, sec.Namespace, sec.Type, sec.Reason} {
+		if strings.Contains(field, sentinel) {
+			t.Fatalf("SECURITY VIOLATION: sentinel leaked into SecretInfo field: %q", field)
+		}
+	}
+	if sec.ValuesCollected {
+		t.Fatalf("SECURITY VIOLATION: ValuesCollected must be false")
+	}
+}
+
+func TestFakeProviderServiceAccount(t *testing.T) {
+	fake := NewFakeProvider()
+	ctx := context.Background()
+
+	autoTrue := true
+	fake.ServiceAccountsData["default"] = map[string]ServiceAccountInfo{
+		"app-sa": {
+			Name:                      "app-sa",
+			Namespace:                 "default",
+			ImagePullSecrets:          []string{"registry-creds"},
+			AutomountServiceAcctToken: &autoTrue,
+			CreatedAt:                 "2026-09-30T10:00:00Z",
+		},
+	}
+
+	// 1. Existing SA
+	sa, err := fake.GetServiceAccount(ctx, "default", "app-sa")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sa.Name != "app-sa" || sa.Unavailable {
+		t.Fatalf("expected existing SA, got: %+v", sa)
+	}
+	if len(sa.ImagePullSecrets) != 1 || sa.ImagePullSecrets[0] != "registry-creds" {
+		t.Fatalf("unexpected SA image pull secrets: %v", sa.ImagePullSecrets)
+	}
+	if sa.AutomountServiceAcctToken == nil || !*sa.AutomountServiceAcctToken {
+		t.Fatalf("unexpected automount setting: %v", sa.AutomountServiceAcctToken)
+	}
+
+	// 2. Missing SA
+	missing, err := fake.GetServiceAccount(ctx, "default", "missing-sa")
+	if err == nil {
+		t.Fatalf("expected error for missing SA")
+	}
+	if !missing.Unavailable {
+		t.Fatalf("expected Unavailable=true for missing SA, got: %+v", missing)
+	}
+}

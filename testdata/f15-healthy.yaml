@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: test-f15-sa
+  namespace: default
+  labels:
+    feature: f15-test
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-app-config
+  namespace: default
+  labels:
+    feature: f15-test
+data:
+  APP_MODE: "test"
+  APP_PORT: "8080"
+  DB_HOST: "localhost"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-app-secret
+  namespace: default
+  labels:
+    feature: f15-test
+type: Opaque
+stringData:
+  DATABASE_PASSWORD: "test-password-not-sensitive-data"
+  API_KEY: "test-api-key-not-real"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-f15-pod
+  namespace: default
+  labels:
+    feature: f15-test
+spec:
+  serviceAccountName: test-f15-sa
+  containers:
+  - name: app
+    image: nginx:alpine
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "32Mi"
+      limits:
+        cpu: "100m"
+        memory: "64Mi"
+    env:
+    - name: APP_MODE
+      valueFrom:
+        configMapKeyRef:
+          name: test-app-config
+          key: APP_MODE
+    - name: APP_PORT
+      valueFrom:
+        configMapKeyRef:
+          name: test-app-config
+          key: APP_PORT
+    - name: DB_PASS
+      valueFrom:
+        secretKeyRef:
+          name: test-app-secret
+          key: DATABASE_PASSWORD
+    envFrom:
+    - configMapRef:
+        name: test-app-config
+    volumeMounts:
+    - name: config-vol
+      mountPath: /etc/config
+    - name: secret-vol
+      mountPath: /etc/secrets
+      readOnly: true
+  volumes:
+  - name: config-vol
+    configMap:
+      name: test-app-config
+  - name: secret-vol
+    secret:
+      secretName: test-app-secret

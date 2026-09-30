@@ -22,27 +22,34 @@ type FakeProvider struct {
 	DaemonSetsData     map[string]map[string]DaemonSetInfo              // namespace -> name -> DaemonSet
 	JobsData           map[string]map[string]JobInfo                    // namespace -> name -> Job
 	CronJobsData       map[string]map[string]CronJobInfo                // namespace -> name -> CronJob
+	// Feature 15: configuration/identity fixtures
+	ConfigMapsData      map[string]map[string]ConfigMapInfo      // namespace -> name -> ConfigMapInfo (keys only, no values)
+	SecretsData         map[string]map[string]SecretInfo         // namespace -> name -> SecretInfo (keys only, NEVER values)
+	ServiceAccountsData map[string]map[string]ServiceAccountInfo // namespace -> name -> ServiceAccountInfo
 	EventsData         map[string][]EventInfo                           // podName -> []EventInfo
 	LogsData           map[string]ContainerLogInfo                      // podName/container -> ContainerLogInfo
 }
 
 func NewFakeProvider() *FakeProvider {
 	return &FakeProvider{
-		ClusterName:        "https://fake.cluster.local:6443",
-		GPUNodesData:       make(map[string]NodeGPUResources),
-		PodsData:           make(map[string][]PodInfo),
-		ServicesData:       make(map[string][]ServiceInfo),
-		PVCsData:           make(map[string]map[string]PersistentVolumeClaimInfo),
-		PVsData:            make(map[string]PersistentVolumeInfo),
-		StorageClassesData: make(map[string]StorageClassInfo),
-		DeploymentsData:    make(map[string]map[string]DeploymentInfo),
-		ReplicaSetsData:    make(map[string]map[string]ReplicaSetInfo),
-		StatefulSetsData:   make(map[string]map[string]StatefulSetInfo),
-		DaemonSetsData:     make(map[string]map[string]DaemonSetInfo),
-		JobsData:           make(map[string]map[string]JobInfo),
-		CronJobsData:       make(map[string]map[string]CronJobInfo),
-		EventsData:         make(map[string][]EventInfo),
-		LogsData:           make(map[string]ContainerLogInfo),
+		ClusterName:         "https://fake.cluster.local:6443",
+		GPUNodesData:        make(map[string]NodeGPUResources),
+		PodsData:            make(map[string][]PodInfo),
+		ServicesData:        make(map[string][]ServiceInfo),
+		PVCsData:            make(map[string]map[string]PersistentVolumeClaimInfo),
+		PVsData:             make(map[string]PersistentVolumeInfo),
+		StorageClassesData:  make(map[string]StorageClassInfo),
+		DeploymentsData:     make(map[string]map[string]DeploymentInfo),
+		ReplicaSetsData:     make(map[string]map[string]ReplicaSetInfo),
+		StatefulSetsData:    make(map[string]map[string]StatefulSetInfo),
+		DaemonSetsData:      make(map[string]map[string]DaemonSetInfo),
+		JobsData:            make(map[string]map[string]JobInfo),
+		CronJobsData:        make(map[string]map[string]CronJobInfo),
+		ConfigMapsData:      make(map[string]map[string]ConfigMapInfo),
+		SecretsData:         make(map[string]map[string]SecretInfo),
+		ServiceAccountsData: make(map[string]map[string]ServiceAccountInfo),
+		EventsData:          make(map[string][]EventInfo),
+		LogsData:            make(map[string]ContainerLogInfo),
 	}
 }
 
@@ -267,5 +274,46 @@ func (f *FakeProvider) GetCronJob(ctx context.Context, namespace, name string) (
 	return CronJobInfo{Name: name, Namespace: namespace, Unavailable: true}, &ProviderError{
 		Code:    ErrCodeResourceNotFound,
 		Message: fmt.Sprintf("cronjob %q not found in namespace %q", name, namespace),
+	}
+}
+
+// ── Feature 15: Configuration & Identity methods ────────────────────────────
+
+func (f *FakeProvider) GetConfigMap(ctx context.Context, namespace, name string) (ConfigMapInfo, error) {
+	if nsMap, ok := f.ConfigMapsData[namespace]; ok {
+		if cm, ok := nsMap[name]; ok {
+			return cm, nil
+		}
+	}
+	return ConfigMapInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: fmt.Sprintf("configmap %q not found in namespace %q", name, namespace)}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("configmap %q not found in namespace %q", name, namespace),
+	}
+}
+
+// GetSecretMetadata returns SecretInfo metadata only. Values are NEVER stored in fake fixtures.
+func (f *FakeProvider) GetSecretMetadata(ctx context.Context, namespace, name string) (SecretInfo, error) {
+	if nsMap, ok := f.SecretsData[namespace]; ok {
+		if sec, ok := nsMap[name]; ok {
+			// Ensure ValuesCollected is always false even for fixtures
+			sec.ValuesCollected = false
+			return sec, nil
+		}
+	}
+	return SecretInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: fmt.Sprintf("secret %q not found in namespace %q", name, namespace), ValuesCollected: false}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("secret %q not found in namespace %q", name, namespace),
+	}
+}
+
+func (f *FakeProvider) GetServiceAccount(ctx context.Context, namespace, name string) (ServiceAccountInfo, error) {
+	if nsMap, ok := f.ServiceAccountsData[namespace]; ok {
+		if sa, ok := nsMap[name]; ok {
+			return sa, nil
+		}
+	}
+	return ServiceAccountInfo{Name: name, Namespace: namespace, Unavailable: true, Reason: fmt.Sprintf("serviceaccount %q not found in namespace %q", name, namespace)}, &ProviderError{
+		Code:    ErrCodeResourceNotFound,
+		Message: fmt.Sprintf("serviceaccount %q not found in namespace %q", name, namespace),
 	}
 }

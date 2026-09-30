@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stack8s/stack8s-ai-diagnose/provider"
@@ -873,5 +875,304 @@ func TestBuildEvidencePackage_WorkloadEvidence(t *testing.T) {
 	}
 }
 
+// ── Feature 15: Configuration & Identity Evidence Tests ──────────────────────
 
+func TestBuildEvidencePackage_ConfigurationEvidence(t *testing.T) {
+	fake := provider.NewFakeProvider()
 
+	// ConfigMap fixture (keys only, no values)
+	if fake.ConfigMapsData["default"] == nil {
+		fake.ConfigMapsData["default"] = make(map[string]provider.ConfigMapInfo)
+	}
+	fake.ConfigMapsData["default"]["app-config"] = provider.ConfigMapInfo{
+		Name:      "app-config",
+		Namespace: "default",
+		Keys:      []string{"APP_MODE", "APP_PORT"},
+	}
+	// MISSING_KEY is intentionally absent from the fixture.
+
+	// Secret fixture (key names only, values NEVER stored)
+	if fake.SecretsData["default"] == nil {
+		fake.SecretsData["default"] = make(map[string]provider.SecretInfo)
+	}
+	fake.SecretsData["default"]["db-secret"] = provider.SecretInfo{
+		Name:            "db-secret",
+		Namespace:       "default",
+		Type:            "Opaque",
+		Keys:            []string{"DATABASE_PASSWORD"},
+		ValuesCollected: false,
+	}
+
+	// ServiceAccount fixture
+	if fake.ServiceAccountsData["default"] == nil {
+		fake.ServiceAccountsData["default"] = make(map[string]provider.ServiceAccountInfo)
+	}
+	fake.ServiceAccountsData["default"]["app-sa"] = provider.ServiceAccountInfo{
+		Name:      "app-sa",
+		Namespace: "default",
+	}
+
+	// imagePullSecret fixture
+	fake.SecretsData["default"]["registry-creds"] = provider.SecretInfo{
+		Name:            "registry-creds",
+		Namespace:       "default",
+		Type:            "kubernetes.io/dockerconfigjson",
+		Keys:            []string{".dockerconfigjson"},
+		ValuesCollected: false,
+	}
+
+	// Node
+	fake.NodesData = []provider.NodeInfo{
+		{Name: "node-1", Status: "Ready"},
+	}
+
+	// Pod with ConfigMap/Secret env refs, volume refs, SA, imagePullSecrets
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:            "cfg-pod",
+			Namespace:          "default",
+			Phase:              "Running",
+			NodeName:           "node-1",
+			CreatedAt:          "2026-09-30T10:00:00Z",
+			ServiceAccountName: "app-sa",
+			ImagePullSecretNames: []string{"registry-creds"},
+			EnvRefs: []provider.EnvVarRef{
+				{ContainerName: "app", EnvName: "APP_MODE", SourceType: "configMapKeyRef", ResourceName: "app-config", ResourceKey: "APP_MODE"},
+				{ContainerName: "app", EnvName: "MISSING_KEY", SourceType: "configMapKeyRef", ResourceName: "app-config", ResourceKey: "MISSING_KEY"},
+				{ContainerName: "app", EnvName: "DB_PASS", SourceType: "secretKeyRef", ResourceName: "db-secret", ResourceKey: "DATABASE_PASSWORD"},
+				{ContainerName: "app", EnvName: "(envFrom)", SourceType: "configMapEnvFrom", ResourceName: "app-config"},
+				{ContainerName: "app", EnvName: "(envFrom)", SourceType: "secretEnvFrom", ResourceName: "missing-secret"},
+			},
+			ConfigVolumeRefs: []provider.ConfigVolumeRef{
+				{VolumeName: "config-vol", SourceType: "configMap", ResourceName: "app-config"},
+				{VolumeName: "secret-vol", SourceType: "secret", ResourceName: "db-secret"},
+			},
+			Containers: []provider.ContainerInfo{
+				{Name: "app", Image: "nginx:alpine", State: "Running"},
+			},
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+	if len(pkg.Pods) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(pkg.Pods))
+	}
+
+	// Find configuration_status evidence
+	var cfgEv *ConfigurationStatusData
+	for _, ev := range pkg.Pods[0].Evidence {
+		if ev.Source == SourceConfigurationStatus {
+			if cd, ok := ev.Data.(ConfigurationStatusData); ok {
+				cd2 := cd
+				cfgEv = &cd2
+			}
+		}
+	}
+	if cfgEv == nil {
+		t.Fatalf("configuration_status evidence item not found")
+	}
+
+	// 1. ServiceAccount exists
+	if !cfgEv.ServiceAccount.Exists || cfgEv.ServiceAccount.Name != "app-sa" {
+		t.Fatalf("unexpected ServiceAccount evidence: %+v", cfgEv.ServiceAccount)
+	}
+
+	// 2. imagePullSecret exists
+	if len(cfgEv.ImagePullSecrets) != 1 || !cfgEv.ImagePullSecrets[0].Exists {
+		t.Fatalf("unexpected imagePullSecret evidence: %+v", cfgEv.ImagePullSecrets)
+	}
+
+	// 3. ConfigMap app-config exists with keys
+	var cmFound *ConfigMapRefData
+	for i, cm := range cfgEv.ConfigMaps {
+		if cm.Name == "app-config" {
+			cmFound = &cfgEv.ConfigMaps[i]
+		}
+	}
+	if cmFound == nil || !cmFound.Exists {
+		t.Fatalf("app-config ConfigMap not found in evidence: %+v", cfgEv.ConfigMaps)
+	}
+
+	// 4. Secret db-secret exists (keys only)
+	var secFound *SecretRefData
+	for i, s := range cfgEv.Secrets {
+		if s.Name == "db-secret" {
+			secFound = &cfgEv.Secrets[i]
+		}
+	}
+	if secFound == nil || !secFound.Exists {
+		t.Fatalf("db-secret not found in evidence: %+v", cfgEv.Secrets)
+	}
+	// CRITICAL: values_collected must always be false
+	if secFound.ValuesCollected {
+		t.Fatalf("SECURITY VIOLATION: ValuesCollected must be false")
+	}
+
+	// 5. Missing secret should be present with Exists=false
+	var missingSecFound *SecretRefData
+	for i, s := range cfgEv.Secrets {
+		if s.Name == "missing-secret" {
+			missingSecFound = &cfgEv.Secrets[i]
+		}
+	}
+	if missingSecFound == nil || missingSecFound.Exists {
+		t.Fatalf("expected missing-secret with Exists=false: %+v", cfgEv.Secrets)
+	}
+	if missingSecFound.ValuesCollected {
+		t.Fatalf("SECURITY VIOLATION: ValuesCollected must be false for missing secret")
+	}
+
+	// 6. Env refs: APP_MODE key_exists=true, MISSING_KEY key_exists=false
+	keyExistMap := make(map[string]bool)
+	resExistMap := make(map[string]bool)
+	for _, er := range cfgEv.EnvRefs {
+		if er.SourceType == "configMapKeyRef" {
+			keyExistMap[er.ResourceKey] = er.KeyExists
+			resExistMap[er.ResourceKey] = er.ResourceExists
+		}
+	}
+	if !resExistMap["APP_MODE"] || !keyExistMap["APP_MODE"] {
+		t.Fatalf("expected APP_MODE key to exist: resExist=%v keyExist=%v", resExistMap["APP_MODE"], keyExistMap["APP_MODE"])
+	}
+	if !resExistMap["MISSING_KEY"] || keyExistMap["MISSING_KEY"] {
+		t.Fatalf("expected MISSING_KEY resource_exists=true key_exists=false: resExist=%v keyExist=%v", resExistMap["MISSING_KEY"], keyExistMap["MISSING_KEY"])
+	}
+
+	// 7. ConfigVolume refs present
+	if len(cfgEv.ConfigVolumeRefs) != 2 {
+		t.Fatalf("expected 2 config volume refs, got %d", len(cfgEv.ConfigVolumeRefs))
+	}
+
+	// 8. Evidence ID uniqueness
+	ids := make(map[string]int)
+	for _, ev := range pkg.Pods[0].Evidence {
+		ids[ev.ID]++
+		if ids[ev.ID] > 1 {
+			t.Fatalf("duplicate evidence ID: %s", ev.ID)
+		}
+	}
+}
+
+func TestSecretLeakCheck(t *testing.T) {
+	// Mandatory: sentinel value must NEVER appear in evidence JSON output.
+	sentinel := "DO_NOT_LEAK_THIS_SECRET_12345"
+
+	fake := provider.NewFakeProvider()
+
+	// Store only the key name — sentinel value must not be in fixture data
+	if fake.SecretsData["default"] == nil {
+		fake.SecretsData["default"] = make(map[string]provider.SecretInfo)
+	}
+	// Note: we deliberately do NOT store the sentinel value anywhere in fixtures.
+	// The fixture stores only a key name "LEAK_KEY", not the sentinel value.
+	fake.SecretsData["default"]["leak-secret"] = provider.SecretInfo{
+		Name:            "leak-secret",
+		Namespace:       "default",
+		Type:            "Opaque",
+		Keys:            []string{"LEAK_KEY"},
+		ValuesCollected: false,
+	}
+
+	fake.NodesData = []provider.NodeInfo{{Name: "node-1", Status: "Ready"}}
+
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:   "leak-test-pod",
+			Namespace: "default",
+			Phase:     "Running",
+			NodeName:  "node-1",
+			CreatedAt: "2026-09-30T10:00:00Z",
+			EnvRefs: []provider.EnvVarRef{
+				{ContainerName: "app", EnvName: "LEAK_VAR", SourceType: "secretKeyRef", ResourceName: "leak-secret", ResourceKey: "LEAK_KEY"},
+			},
+			Containers: []provider.ContainerInfo{
+				{Name: "app", Image: "nginx:alpine", State: "Running"},
+			},
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+
+	// Serialize the entire evidence package to JSON
+	jsonBytes, err := json.Marshal(pkg)
+	if err != nil {
+		t.Fatalf("failed to serialize evidence package: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+
+	// CRITICAL: sentinel must not appear anywhere in the JSON output
+	if strings.Contains(jsonStr, sentinel) {
+		t.Fatalf("SECURITY VIOLATION: sentinel value %q found in evidence JSON output", sentinel)
+	}
+
+	// Verify values_collected is false in all secret refs
+	for _, podPkg := range pkg.Pods {
+		for _, ev := range podPkg.Evidence {
+			if ev.Source == SourceConfigurationStatus {
+				if cd, ok := ev.Data.(ConfigurationStatusData); ok {
+					for _, sr := range cd.Secrets {
+						if sr.ValuesCollected {
+							t.Fatalf("SECURITY VIOLATION: ValuesCollected=true found in evidence for secret %q", sr.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestBuildEvidencePackage_PodWithNoConfigRefs(t *testing.T) {
+	// A pod with no ConfigMap/Secret refs should produce empty collections, not nil.
+	fake := provider.NewFakeProvider()
+	fake.NodesData = []provider.NodeInfo{{Name: "node-1", Status: "Ready"}}
+	fake.PodsData["default"] = []provider.PodInfo{
+		{
+			PodName:   "plain-pod",
+			Namespace: "default",
+			Phase:     "Running",
+			NodeName:  "node-1",
+			CreatedAt: "2026-09-30T10:00:00Z",
+			Containers: []provider.ContainerInfo{
+				{Name: "app", Image: "nginx:alpine", State: "Running"},
+			},
+		},
+	}
+
+	pkg := buildEvidencePackage(fake, "default")
+	if len(pkg.Pods) != 1 {
+		t.Fatalf("expected 1 pod")
+	}
+
+	var cfgEv *ConfigurationStatusData
+	for _, ev := range pkg.Pods[0].Evidence {
+		if ev.Source == SourceConfigurationStatus {
+			if cd, ok := ev.Data.(ConfigurationStatusData); ok {
+				cd2 := cd
+				cfgEv = &cd2
+			}
+		}
+	}
+	if cfgEv == nil {
+		t.Fatalf("configuration_status evidence item not found")
+	}
+
+	// Empty collections must be explicit, not nil
+	if cfgEv.ConfigMaps == nil {
+		t.Fatalf("ConfigMaps should be empty slice, not nil")
+	}
+	if cfgEv.Secrets == nil {
+		t.Fatalf("Secrets should be empty slice, not nil")
+	}
+	if cfgEv.EnvRefs == nil {
+		t.Fatalf("EnvRefs should be empty slice, not nil")
+	}
+	if cfgEv.ImagePullSecrets == nil {
+		t.Fatalf("ImagePullSecrets should be empty slice, not nil")
+	}
+	if len(cfgEv.ConfigMaps) != 0 {
+		t.Fatalf("expected 0 ConfigMaps for plain pod, got %d", len(cfgEv.ConfigMaps))
+	}
+	if len(cfgEv.Secrets) != 0 {
+		t.Fatalf("expected 0 Secrets for plain pod, got %d", len(cfgEv.Secrets))
+	}
+}

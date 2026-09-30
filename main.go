@@ -191,14 +191,15 @@ func collectContainerLogs(prov provider.InfrastructureProvider, namespace, podNa
 type EvidenceSource string
 
 const (
-	SourcePodStatus       EvidenceSource = "pod_status"
-	SourceKubernetesEvent EvidenceSource = "kubernetes_event"
-	SourceContainerLogs   EvidenceSource = "container_logs"
-	SourceNodeStatus      EvidenceSource = "node_status"
-	SourceGPUStatus       EvidenceSource = "gpu_status"
-	SourceServiceStatus   EvidenceSource = "service_status"
-	SourceStorageStatus   EvidenceSource = "storage_status"
-	SourceWorkloadStatus  EvidenceSource = "workload_status"
+	SourcePodStatus            EvidenceSource = "pod_status"
+	SourceKubernetesEvent      EvidenceSource = "kubernetes_event"
+	SourceContainerLogs        EvidenceSource = "container_logs"
+	SourceNodeStatus           EvidenceSource = "node_status"
+	SourceGPUStatus            EvidenceSource = "gpu_status"
+	SourceServiceStatus        EvidenceSource = "service_status"
+	SourceStorageStatus        EvidenceSource = "storage_status"
+	SourceWorkloadStatus       EvidenceSource = "workload_status"
+	SourceConfigurationStatus  EvidenceSource = "configuration_status" // Feature 15
 )
 
 type ControllerRefData struct {
@@ -327,6 +328,65 @@ type ContainerLogsData struct {
 	UnavailableReason string   `json:"unavailable_reason,omitempty"`
 	APIError          bool     `json:"api_error"`
 	APIErrorMsg       string   `json:"api_error_message,omitempty"`
+}
+
+// ConfigMapRefData is safe ConfigMap evidence — keys only, never values.
+type ConfigMapRefData struct {
+	Name        string   `json:"name"`
+	Exists      bool     `json:"exists"`
+	Keys        []string `json:"keys,omitempty"`
+	Unavailable bool     `json:"unavailable,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+}
+
+// SecretRefData is safe Secret evidence — key names only, values NEVER collected.
+type SecretRefData struct {
+	Name            string   `json:"name"`
+	Type            string   `json:"type,omitempty"`
+	Exists          bool     `json:"exists"`
+	Keys            []string `json:"keys,omitempty"`
+	ValuesCollected bool     `json:"values_collected"` // always false — security boundary
+	Unavailable     bool     `json:"unavailable,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+}
+
+// EnvRefData represents a single resolved environment variable reference in evidence.
+type EnvRefData struct {
+	ContainerName   string `json:"container_name"`
+	EnvName         string `json:"env_name"`
+	SourceType      string `json:"source_type"`
+	ResourceName    string `json:"resource_name"`
+	ResourceKey     string `json:"resource_key,omitempty"`
+	Optional        bool   `json:"optional,omitempty"`
+	ResourceExists  bool   `json:"resource_exists"`
+	KeyExists       bool   `json:"key_exists,omitempty"` // only for keyRef types
+}
+
+// ImagePullSecretRefData holds imagePullSecret reference evidence.
+type ImagePullSecretRefData struct {
+	Name   string `json:"name"`
+	Exists bool   `json:"exists"`
+}
+
+// ServiceAccountRefData holds ServiceAccount reference evidence.
+type ServiceAccountRefData struct {
+	Name      string `json:"name"`
+	Exists    bool   `json:"exists"`
+	CreatedAt string `json:"created_at,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// ConfigurationStatusData is the Feature 15 evidence payload.
+// Secret values are never present here. ValuesCollected is always false.
+type ConfigurationStatusData struct {
+	PodName          string                   `json:"pod_name"`
+	Namespace        string                   `json:"namespace"`
+	ServiceAccount   ServiceAccountRefData    `json:"service_account"`
+	ImagePullSecrets []ImagePullSecretRefData  `json:"image_pull_secrets"`
+	ConfigMaps       []ConfigMapRefData       `json:"config_maps"`
+	Secrets          []SecretRefData          `json:"secrets"`
+	EnvRefs          []EnvRefData             `json:"env_refs"`
+	ConfigVolumeRefs []provider.ConfigVolumeRef `json:"config_volume_refs"`
 }
 
 type EvidenceItem struct {
@@ -769,7 +829,175 @@ func buildEvidencePackage(prov provider.InfrastructureProvider, namespace string
 			Data:   workloadEv,
 		})
 
+		// ── Feature 15: configuration_status ─────────────────────────────
+		{
+			ctx := context.TODO()
+			ns := pod.Namespace
+
+			// --- ServiceAccount ---
+			saName := pod.ServiceAccountName
+			saRef := ServiceAccountRefData{Name: saName}
+			if saName != "" {
+				saInfo, saErr := prov.GetServiceAccount(ctx, ns, saName)
+				saRef.Exists = !saInfo.Unavailable && saErr == nil
+				if !saRef.Exists && saErr != nil {
+					saRef.Reason = saInfo.Reason
+				} else if saRef.Exists {
+					saRef.CreatedAt = saInfo.CreatedAt
+				}
+			}
+
+			// --- imagePullSecrets ---
+			var ipsRefs []ImagePullSecretRefData
+			for _, ipsName := range pod.ImagePullSecretNames {
+				ipsInfo, ipsErr := prov.GetSecretMetadata(ctx, ns, ipsName)
+				ipsRefs = append(ipsRefs, ImagePullSecretRefData{
+					Name:   ipsName,
+					Exists: !ipsInfo.Unavailable && ipsErr == nil,
+				})
+			}
+			if ipsRefs == nil {
+				ipsRefs = []ImagePullSecretRefData{}
+			}
+
+			// --- Collect unique ConfigMap/Secret references ---
+			// Build de-duplicated sets of referenced ConfigMap/Secret names.
+			cmNames := make(map[string]struct{})
+			secretNames := make(map[string]struct{})
+
+			for _, ref := range pod.EnvRefs {
+				switch ref.SourceType {
+				case "configMapKeyRef", "configMapEnvFrom":
+					cmNames[ref.ResourceName] = struct{}{}
+				case "secretKeyRef", "secretEnvFrom":
+					secretNames[ref.ResourceName] = struct{}{}
+				}
+			}
+			for _, vol := range pod.ConfigVolumeRefs {
+				switch vol.SourceType {
+				case "configMap":
+					cmNames[vol.ResourceName] = struct{}{}
+				case "secret":
+					secretNames[vol.ResourceName] = struct{}{}
+				}
+			}
+
+			// --- ConfigMap evidence ---
+			var cmRefs []ConfigMapRefData
+			// Pre-fetch all ConfigMap infos to allow key-existence lookup.
+			cmInfoCache := make(map[string]provider.ConfigMapInfo)
+			for name := range cmNames {
+				info, err := prov.GetConfigMap(ctx, ns, name)
+				cmInfoCache[name] = info
+				ref := ConfigMapRefData{
+					Name:        name,
+					Exists:      !info.Unavailable && err == nil,
+					Keys:        info.Keys,
+					Unavailable: info.Unavailable,
+					Reason:      info.Reason,
+				}
+				cmRefs = append(cmRefs, ref)
+			}
+			if cmRefs == nil {
+				cmRefs = []ConfigMapRefData{}
+			}
+
+			// --- Secret evidence (metadata/keys only) ---
+			var secretRefs []SecretRefData
+			// Pre-fetch all Secret infos for key-existence lookup.
+			secretInfoCache := make(map[string]provider.SecretInfo)
+			for name := range secretNames {
+				info, err := prov.GetSecretMetadata(ctx, ns, name)
+				secretInfoCache[name] = info
+				ref := SecretRefData{
+					Name:            name,
+					Type:            info.Type,
+					Exists:          !info.Unavailable && err == nil,
+					Keys:            info.Keys,
+					ValuesCollected: false, // security boundary — always false
+					Unavailable:     info.Unavailable,
+					Reason:          info.Reason,
+				}
+				secretRefs = append(secretRefs, ref)
+			}
+			if secretRefs == nil {
+				secretRefs = []SecretRefData{}
+			}
+
+			// --- Resolved env reference evidence ---
+			var envRefData []EnvRefData
+			for _, ref := range pod.EnvRefs {
+				erd := EnvRefData{
+					ContainerName: ref.ContainerName,
+					EnvName:       ref.EnvName,
+					SourceType:    ref.SourceType,
+					ResourceName:  ref.ResourceName,
+					ResourceKey:   ref.ResourceKey,
+					Optional:      ref.Optional,
+				}
+				switch ref.SourceType {
+				case "configMapKeyRef":
+					if info, ok := cmInfoCache[ref.ResourceName]; ok {
+						erd.ResourceExists = !info.Unavailable
+						if erd.ResourceExists && ref.ResourceKey != "" {
+							for _, k := range info.Keys {
+								if k == ref.ResourceKey {
+									erd.KeyExists = true
+									break
+								}
+							}
+						}
+					}
+				case "configMapEnvFrom":
+					if info, ok := cmInfoCache[ref.ResourceName]; ok {
+						erd.ResourceExists = !info.Unavailable
+					}
+				case "secretKeyRef":
+					if info, ok := secretInfoCache[ref.ResourceName]; ok {
+						erd.ResourceExists = !info.Unavailable
+						if erd.ResourceExists && ref.ResourceKey != "" {
+							for _, k := range info.Keys {
+								if k == ref.ResourceKey {
+									erd.KeyExists = true
+									break
+								}
+							}
+						}
+					}
+				case "secretEnvFrom":
+					if info, ok := secretInfoCache[ref.ResourceName]; ok {
+						erd.ResourceExists = !info.Unavailable
+					}
+				}
+				envRefData = append(envRefData, erd)
+			}
+			if envRefData == nil {
+				envRefData = []EnvRefData{}
+			}
+
+			cfgData := ConfigurationStatusData{
+				PodName:          pod.PodName,
+				Namespace:        pod.Namespace,
+				ServiceAccount:   saRef,
+				ImagePullSecrets: ipsRefs,
+				ConfigMaps:       cmRefs,
+				Secrets:          secretRefs,
+				EnvRefs:          envRefData,
+				ConfigVolumeRefs: pod.ConfigVolumeRefs,
+			}
+			if cfgData.ConfigVolumeRefs == nil {
+				cfgData.ConfigVolumeRefs = []provider.ConfigVolumeRef{}
+			}
+
+			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{
+				ID:     nextID(),
+				Source: SourceConfigurationStatus,
+				Data:   cfgData,
+			})
+		}
+
 		// ── E2..N-type: kubernetes_event ─────────────────────────────────
+
 		events, err := prov.GetPodEvents(context.TODO(), pod.Namespace, pod.PodName)
 		if err != nil {
 			podPkg.Evidence = append(podPkg.Evidence, EvidenceItem{

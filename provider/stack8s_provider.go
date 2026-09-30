@@ -103,3 +103,15 @@ func (s *Stack8sProvider) GetPodEvents(ctx context.Context, namespace, podName s
 func (s *Stack8sProvider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, tailLines int64) (ContainerLogInfo, error) {
 	return ContainerLogInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
 }
+
+func (s *Stack8sProvider) GetConfigMap(ctx context.Context, namespace, name string) (ConfigMapInfo, error) {
+	return ConfigMapInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetSecretMetadata(ctx context.Context, namespace, name string) (SecretInfo, error) {
+	return SecretInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
+
+func (s *Stack8sProvider) GetServiceAccount(ctx context.Context, namespace, name string) (ServiceAccountInfo, error) {
+	return ServiceAccountInfo{}, &ProviderError{Code: ErrCodeUnavailable, Message: "Stack8sProvider API pending implementation"}
+}
