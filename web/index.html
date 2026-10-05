@@ -7,159 +7,152 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app-container">
+<div class="app">
+  <aside>
+    <div class="side-logo">KORDIN</div>
+    <div class="nav-head">DIAGNOSE</div>
+    <nav class="nav">
+      <a href="#target">Target</a>
+      <a href="#flow">Flow</a>
+      <a href="#timeline">Timeline</a>
+      <a href="#result">Result</a>
+    </nav>
+    <div class="nav-head">SYSTEM</div>
+    <nav class="nav">
+      <a href="#" onclick="return false;">Needle 3 — F19</a>
+      <a href="#" onclick="return false;">9 tools</a>
+      <a href="#" onclick="return false;">No secrets</a>
+    </nav>
+    <div class="version">KORDIN · AI DIAGNOSE<br>BUILD V16</div>
+  </aside>
 
-    <!-- Top System Header -->
-    <header class="system-header">
-      <div class="brand">
-        <div class="brand-mark">K</div>
-        <div class="brand-title">
-          <h1>KORDIN</h1>
-          <span class="sub-title">AI Diagnose — Infrastructure Intelligence</span>
-        </div>
-      </div>
-      <div class="status-badges">
-        <div class="badge" id="indicator-model"><span class="badge-dot ok"></span><span class="badge-label">Engine</span><strong>Needle 3 — F19</strong></div>
-        <div class="badge" id="indicator-provider"><span class="badge-dot ok"></span><span class="badge-label">Provider</span><strong id="provider-badge-text">Local Kubernetes</strong></div>
-        <div class="badge"><span class="badge-dot ok"></span><span class="badge-label">Tools</span><strong>9 diagnostic</strong></div>
-        <div class="badge"><span class="badge-dot ok"></span><span class="badge-label">Security</span><strong>No secrets</strong></div>
-      </div>
-    </header>
-
-    <!-- Flow -->
-    <section class="panel flow-header-panel">
-      <div class="panel-title">DIAGNOSTIC FLOW</div>
-      <div class="flow-pipeline">
-        <div class="flow-step" id="flow-step-question"><div class="step-number">1</div><div class="step-label">Question</div></div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-needle1"><div class="step-number">2</div><div class="step-label">Needle 3</div></div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-tool"><div class="step-number">3</div><div class="step-label">Tool Selection</div></div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-k8s"><div class="step-number">4</div><div class="step-label">Kubernetes</div></div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-evidence"><div class="step-number">5</div><div class="step-label">Evidence</div></div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-needle2"><div class="step-number">6</div><div class="step-label">Needle 3</div></div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-diagnosis"><div class="step-number">7</div><div class="step-label">Diagnosis</div></div>
-      </div>
-    </section>
-
-    <main class="workspace-grid">
-      <aside class="control-panel">
+  <main>
+    <section id="target">
+      <div class="eyebrow">CREATE / DIAGNOSE</div>
+      <h2>Diagnose a resource.</h2>
+      <p class="copy">Run the real-time AI diagnostic loop against a namespace and pod. Evidence comes from the live Kubernetes provider; nothing is guessed.</p>
+      <div class="grid2">
         <div class="panel">
-          <div class="panel-head">
-            <h2>Diagnose</h2>
-            <span class="tag">Resource</span>
-          </div>
-          <form id="diagnose-form" onsubmit="return false;">
-            <div class="form-group">
-              <label for="input-namespace">Namespace</label>
-              <input type="text" id="input-namespace" value="ai-diagnose-test" placeholder="e.g. default, kube-system">
+          <form id="diagnose-form" onsubmit="return false;" class="form-col">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="input-namespace">Namespace</label>
+                <input type="text" id="input-namespace" value="ai-diagnose-test" placeholder="e.g. default, ai-diagnose-test">
+              </div>
+              <div class="form-group">
+                <label for="input-pod">Target pod</label>
+                <input type="text" id="input-pod" value="crashloop-test-896754f5f-n9rmf" placeholder="e.g. crashloop-test-...">
+              </div>
             </div>
-            <div class="form-group">
-              <label for="input-pod">Target Pod</label>
-              <input type="text" id="input-pod" value="crashloop-test-896754f5f-n9rmf" placeholder="e.g. crashloop-test-...">
-            </div>
-            <div class="form-group">
-              <label for="select-provider">Provider</label>
-              <select id="select-provider">
-                <option value="local-kubernetes" selected>Local Kubernetes</option>
-                <option value="fake">Fake / Mock</option>
-              </select>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="select-provider">Provider</label>
+                <select id="select-provider">
+                  <option value="local-kubernetes" selected>Local Kubernetes</option>
+                  <option value="fake">Fake / Mock</option>
+                </select>
+              </div>
             </div>
             <div class="form-group">
               <label for="input-question">Question</label>
               <textarea id="input-question" rows="3" placeholder="Why is this pod failing?">Why is this pod repeatedly failing?</textarea>
             </div>
-            <div class="presets-container">
-              <span class="presets-label">Presets</span>
-              <button type="button" class="preset-btn" onclick="applyPreset('imagepull')">ImagePullBackOff</button>
-              <button type="button" class="preset-btn" onclick="applyPreset('healthy')">Healthy</button>
-              <button type="button" class="preset-btn" onclick="applyPreset('oom')">OOMKilled</button>
+            <div class="toolbar">
+              <button type="button" class="chip" onclick="applyPreset('imagepull')">ImagePullBackOff</button>
+              <button type="button" class="chip" onclick="applyPreset('healthy')">Healthy</button>
+              <button type="button" class="chip" onclick="applyPreset('oom')">OOMKilled</button>
             </div>
-            <button type="submit" id="btn-diagnose" class="btn-primary">
-              <span class="btn-text">Run Diagnosis</span>
-            </button>
+            <div class="toolbar">
+              <button type="submit" id="btn-diagnose" class="btn primary"><span class="btn-text">Run diagnosis</span></button>
+            </div>
           </form>
+        </div>
+        <div class="panel panel-side">
+          <h3>Status</h3>
+          <div class="stat-row"><span class="mono">ENGINE</span><b>Needle 3 — F19</b></div>
+          <div class="stat-row"><span class="mono">PROVIDER</span><b id="provider-badge-text">Local Kubernetes</b></div>
+          <div class="stat-row"><span class="mono">TOOLS</span><b>9 diagnostic</b></div>
+          <div class="stat-row"><span class="mono">SECURITY</span><b>No secrets</b></div>
+          <div id="indicator-model"></div>
+          <div id="indicator-provider"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="flow">
+      <div class="eyebrow">PIPELINE</div>
+      <h2>Loop</h2>
+      <div class="panel">
+        <div class="flow-pipeline">
+          <div class="flow-step" id="flow-step-question"><div class="step-number">1</div><div class="step-label">Question</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step" id="flow-step-needle1"><div class="step-number">2</div><div class="step-label">Needle 3</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step" id="flow-step-tool"><div class="step-number">3</div><div class="step-label">Tools</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step" id="flow-step-k8s"><div class="step-number">4</div><div class="step-label">Kubernetes</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step" id="flow-step-evidence"><div class="step-number">5</div><div class="step-label">Evidence</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step" id="flow-step-needle2"><div class="step-number">6</div><div class="step-label">Needle 3</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step" id="flow-step-diagnosis"><div class="step-number">7</div><div class="step-label">Diagnosis</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="timeline">
+      <div class="eyebrow">RUN</div>
+      <h2>Timeline</h2>
+      <div class="panel">
+        <div class="panel-head">
+          <span class="mono" id="iteration-count-badge">—</span>
+        </div>
+        <div class="timeline-container" id="timeline-list"></div>
+      </div>
+    </section>
+
+    <section id="result">
+      <div class="eyebrow">OUTPUT</div>
+      <h2>Result</h2>
+
+      <div id="state-empty" class="panel card-empty">
+        <p class="muted">Ready to diagnose. Pick a target above and run the loop.</p>
+      </div>
+      <div id="state-loading" class="panel card-loading hidden">
+        <div class="spinner"></div>
+        <p id="loading-title">Running diagnostic loop…</p>
+        <p id="loading-subtitle" class="muted">Querying Needle 3 & executing provider tools</p>
+      </div>
+
+      <div id="state-results" class="hidden">
+        <div class="panel">
+          <div class="panel-head"><h3>Tool calls & evidence</h3></div>
+          <div id="tool-calls-container"></div>
         </div>
 
         <div class="panel">
-          <div class="panel-head"><h3>How it works</h3></div>
-          <p class="muted">Needle 3 selects from 9 diagnostic tools, executes them via Go InfrastructureProvider, collects real Kubernetes evidence, and returns a grounded diagnosis. No secrets are exposed.</p>
-        </div>
-      </aside>
-
-      <section class="results-panel">
-        <div id="state-empty" class="panel card-empty">
-          <h3>Ready to diagnose</h3>
-          <p class="muted">Ask a Kubernetes question. The loop collects evidence and returns a grounded diagnosis.</p>
-        </div>
-        <div id="state-loading" class="panel card-loading hidden">
-          <div class="spinner"></div>
-          <h3 id="loading-title">Running diagnostic loop…</h3>
-          <p id="loading-subtitle" class="muted">Querying Needle 3 & executing provider tools</p>
+          <div class="eyebrow">AI DIAGNOSIS</div>
+          <div class="diag-section"><h3>Diagnosis</h3><div class="box" id="diag-title-content"></div></div>
+          <div class="diag-section"><h3>Root Cause</h3><div class="box" id="diag-rootcause-content"></div></div>
+          <div class="diag-section"><h3>Evidence</h3><ul class="evidence-list" id="diag-evidence-list"></ul></div>
+          <div class="diag-section"><h3>Recommended Next Step</h3><div class="box box-green" id="diag-recommendation-content"></div></div>
         </div>
 
-        <div id="state-results" class="results-container hidden">
-          <div class="panel">
-            <div class="panel-head">
-              <h2>Live Diagnostic Timeline</h2>
-              <span class="tag" id="iteration-count-badge">1 Iteration</span>
-            </div>
-            <div class="timeline-container" id="timeline-list"></div>
-          </div>
+        <details class="panel">
+          <summary>Investigation details / raw response</summary>
+          <pre id="raw-model-response" class="code-block"></pre>
+        </details>
+      </div>
 
-          <div class="panel">
-            <div class="panel-head"><h2>Tool Calls & Evidence</h2></div>
-            <div id="tool-calls-container"></div>
-          </div>
-
-          <div class="panel panel-diagnosis">
-            <div class="panel-head">
-              <h2>AI Diagnosis</h2>
-              <span class="tag ok">Grounded in evidence</span>
-            </div>
-            <div class="diag-section">
-              <h3 class="diag-section-title">Diagnosis</h3>
-              <div class="diag-content-box" id="diag-title-content"></div>
-            </div>
-            <div class="diag-section">
-              <h3 class="diag-section-title">Root Cause</h3>
-              <div class="diag-content-box" id="diag-rootcause-content"></div>
-            </div>
-            <div class="diag-section">
-              <h3 class="diag-section-title">Evidence</h3>
-              <ul class="evidence-list" id="diag-evidence-list"></ul>
-            </div>
-            <div class="diag-section">
-              <h3 class="diag-section-title">Recommended Next Step</h3>
-              <div class="recommendation-box" id="diag-recommendation-content"></div>
-            </div>
-          </div>
-
-          <details class="panel">
-            <summary class="panel-head summary-header">
-              <span class="summary-title">Investigation details / raw response</span>
-              <span class="tag">Debug</span>
-            </summary>
-            <pre id="raw-model-response" class="code-block"></pre>
-          </details>
-        </div>
-
-        <div id="state-error" class="panel card-error hidden">
-          <div class="error-header"><span>⚠</span><h3 id="error-title">Diagnostic error</h3></div>
-          <p id="error-message"></p>
-          <div class="muted">Check namespace/pod names, KUBECONFIG connectivity, and provider selection.</div>
-        </div>
-      </section>
-    </main>
-
-    <footer class="app-footer">
-      <p>KORDIN · AI Diagnose · Needle 3 F19 · InfrastructureProvider</p>
-    </footer>
-  </div>
-  <script src="app.js"></script>
+      <div id="state-error" class="panel card-error hidden">
+        <h3 id="error-title">Diagnostic error</h3>
+        <p id="error-message"></p>
+        <p class="muted">Check namespace/pod names, KUBECONFIG connectivity, and provider selection.</p>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
 </body>
 </html>
