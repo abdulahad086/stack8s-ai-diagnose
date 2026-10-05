@@ -3,289 +3,163 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>stack8s-ai-diagnose — Real-Time AI Kubernetes Diagnostics</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <title>KORDIN · AI Diagnose</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="app-container">
-    
-    <!-- Top System Header & Indicators -->
+
+    <!-- Top System Header -->
     <header class="system-header">
       <div class="brand">
-        <div class="brand-logo">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-            <polyline points="2 17 12 22 22 17"></polyline>
-            <polyline points="2 12 12 17 22 12"></polyline>
-          </svg>
-        </div>
+        <div class="brand-mark">K</div>
         <div class="brand-title">
-          <h1>stack8s-ai-diagnose</h1>
-          <span class="sub-title">Real-Time Kubernetes Diagnostic Loop (MVP Runtime)</span>
+          <h1>KORDIN</h1>
+          <span class="sub-title">AI Diagnose — Infrastructure Intelligence</span>
         </div>
       </div>
-
-      <!-- System Status Badges -->
       <div class="status-badges">
-        <div class="badge badge-accent" id="indicator-model">
-          <span class="badge-dot"></span>
-          <span class="badge-label">AI Engine:</span>
-          <strong>Needle 3 — F19</strong>
-        </div>
-        <div class="badge badge-purple" id="indicator-provider">
-          <span class="badge-dot"></span>
-          <span class="badge-label">Provider:</span>
-          <strong id="provider-badge-text">InfrastructureProvider</strong>
-        </div>
-        <div class="badge badge-blue">
-          <span class="badge-dot"></span>
-          <span class="badge-label">Tools:</span>
-          <strong>9 Diagnostic Tools</strong>
-        </div>
-        <div class="badge badge-green">
-          <span class="badge-dot"></span>
-          <span class="badge-label">Security:</span>
-          <strong>No Secrets Exposed</strong>
-        </div>
+        <div class="badge" id="indicator-model"><span class="badge-dot ok"></span><span class="badge-label">Engine</span><strong>Needle 3 — F19</strong></div>
+        <div class="badge" id="indicator-provider"><span class="badge-dot ok"></span><span class="badge-label">Provider</span><strong id="provider-badge-text">Local Kubernetes</strong></div>
+        <div class="badge"><span class="badge-dot ok"></span><span class="badge-label">Tools</span><strong>9 diagnostic</strong></div>
+        <div class="badge"><span class="badge-dot ok"></span><span class="badge-label">Security</span><strong>No secrets</strong></div>
       </div>
     </header>
 
-    <!-- Diagnostic Flow Header Visualization -->
-    <section class="flow-header-card">
-      <div class="flow-title">DIAGNOSTIC ARCHITECTURE LOOP FLOW</div>
+    <!-- Flow -->
+    <section class="panel flow-header-panel">
+      <div class="panel-title">DIAGNOSTIC FLOW</div>
       <div class="flow-pipeline">
-        <div class="flow-step" id="flow-step-question">
-          <div class="step-number">1</div>
-          <div class="step-label">Question</div>
-        </div>
+        <div class="flow-step" id="flow-step-question"><div class="step-number">1</div><div class="step-label">Question</div></div>
         <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-needle1">
-          <div class="step-number">2</div>
-          <div class="step-label">Needle 3</div>
-        </div>
+        <div class="flow-step" id="flow-step-needle1"><div class="step-number">2</div><div class="step-label">Needle 3</div></div>
         <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-tool">
-          <div class="step-number">3</div>
-          <div class="step-label">Tool Selection</div>
-        </div>
+        <div class="flow-step" id="flow-step-tool"><div class="step-number">3</div><div class="step-label">Tool Selection</div></div>
         <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-k8s">
-          <div class="step-number">4</div>
-          <div class="step-label">Kubernetes</div>
-        </div>
+        <div class="flow-step" id="flow-step-k8s"><div class="step-number">4</div><div class="step-label">Kubernetes</div></div>
         <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-evidence">
-          <div class="step-number">5</div>
-          <div class="step-label">Evidence</div>
-        </div>
+        <div class="flow-step" id="flow-step-evidence"><div class="step-number">5</div><div class="step-label">Evidence</div></div>
         <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-needle2">
-          <div class="step-number">6</div>
-          <div class="step-label">Needle 3</div>
-        </div>
+        <div class="flow-step" id="flow-step-needle2"><div class="step-number">6</div><div class="step-label">Needle 3</div></div>
         <div class="flow-arrow">→</div>
-        <div class="flow-step" id="flow-step-diagnosis">
-          <div class="step-number">7</div>
-          <div class="step-label">Diagnosis</div>
-        </div>
+        <div class="flow-step" id="flow-step-diagnosis"><div class="step-number">7</div><div class="step-label">Diagnosis</div></div>
       </div>
     </section>
 
-    <!-- Main Workspace Layout -->
     <main class="workspace-grid">
-
-      <!-- Left Column: Input Form & Quick Presets -->
       <aside class="control-panel">
-        <div class="card card-form">
-          <div class="card-header">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-            <h2>Workload Query Input</h2>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Diagnose</h2>
+            <span class="tag">Resource</span>
           </div>
-
           <form id="diagnose-form" onsubmit="return false;">
             <div class="form-group">
               <label for="input-namespace">Namespace</label>
-              <input type="text" id="input-namespace" value="default" placeholder="e.g. default, kube-system">
+              <input type="text" id="input-namespace" value="ai-diagnose-test" placeholder="e.g. default, kube-system">
             </div>
-
             <div class="form-group">
-              <label for="input-pod">Target Pod Name</label>
-              <input type="text" id="input-pod" value="f18-imagepull-001" placeholder="e.g. f18-imagepull-001">
+              <label for="input-pod">Target Pod</label>
+              <input type="text" id="input-pod" value="crashloop-test-896754f5f-n9rmf" placeholder="e.g. crashloop-test-...">
             </div>
-
             <div class="form-group">
-              <label for="select-provider">Infrastructure Provider</label>
+              <label for="select-provider">Provider</label>
               <select id="select-provider">
-                <option value="fake" selected>Fake / Mock Cluster Provider (Fast Demo)</option>
-                <option value="local-kubernetes">Local Kubernetes Cluster Provider (~/.kube/config)</option>
+                <option value="local-kubernetes" selected>Local Kubernetes</option>
+                <option value="fake">Fake / Mock</option>
               </select>
             </div>
-
             <div class="form-group">
-              <label for="input-question">Diagnostic Question</label>
-              <textarea id="input-question" rows="3" placeholder="Why is this pod failing?">Why is pod f18-imagepull-001 failing in namespace default?</textarea>
+              <label for="input-question">Question</label>
+              <textarea id="input-question" rows="3" placeholder="Why is this pod failing?">Why is this pod repeatedly failing?</textarea>
             </div>
-
             <div class="presets-container">
-              <span class="presets-label">Demo Presets:</span>
+              <span class="presets-label">Presets</span>
               <button type="button" class="preset-btn" onclick="applyPreset('imagepull')">ImagePullBackOff</button>
-              <button type="button" class="preset-btn" onclick="applyPreset('healthy')">Healthy Pod</button>
+              <button type="button" class="preset-btn" onclick="applyPreset('healthy')">Healthy</button>
               <button type="button" class="preset-btn" onclick="applyPreset('oom')">OOMKilled</button>
             </div>
-
             <button type="submit" id="btn-diagnose" class="btn-primary">
-              <span class="btn-icon">⚡</span>
-              <span class="btn-text">Diagnose Pod</span>
+              <span class="btn-text">Run Diagnosis</span>
             </button>
           </form>
         </div>
 
-        <!-- Quick Help Card -->
-        <div class="card card-info">
-          <div class="card-header">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-            <h3>How It Works</h3>
-          </div>
-          <p class="text-muted">
-            The AI diagnostic system routes queries through Needle 3 F19. The model dynamically selects from 9 Kubernetes tools, executes them via Go <code>InfrastructureProvider</code>, collects evidence, and generates a grounded diagnosis without exposing raw secrets.
-          </p>
+        <div class="panel">
+          <div class="panel-head"><h3>How it works</h3></div>
+          <p class="muted">Needle 3 selects from 9 diagnostic tools, executes them via Go InfrastructureProvider, collects real Kubernetes evidence, and returns a grounded diagnosis. No secrets are exposed.</p>
         </div>
       </aside>
 
-      <!-- Right Column: Results & Telemetry -->
       <section class="results-panel">
-
-        <!-- Empty State -->
-        <div id="state-empty" class="card card-empty">
-          <div class="empty-icon">🔍</div>
-          <h3>Ready for Diagnostics</h3>
-          <p>
-            Ask why a Kubernetes workload is failing. Needle 3 will select diagnostic tools, collect Kubernetes evidence, and generate a grounded diagnosis.
-          </p>
-          <div class="empty-hint">Click <strong>Diagnose Pod</strong> to run the end-to-end loop.</div>
+        <div id="state-empty" class="panel card-empty">
+          <h3>Ready to diagnose</h3>
+          <p class="muted">Ask a Kubernetes question. The loop collects evidence and returns a grounded diagnosis.</p>
         </div>
-
-        <!-- Loading State -->
-        <div id="state-loading" class="card card-loading hidden">
+        <div id="state-loading" class="panel card-loading hidden">
           <div class="spinner"></div>
-          <h3 id="loading-title">Running Diagnostic Loop...</h3>
-          <p id="loading-subtitle" class="text-muted">Querying Needle 3 F19 model & executing provider tools</p>
+          <h3 id="loading-title">Running diagnostic loop…</h3>
+          <p id="loading-subtitle" class="muted">Querying Needle 3 & executing provider tools</p>
         </div>
 
-        <!-- Main Diagnosis Output (Visible after response) -->
         <div id="state-results" class="results-container hidden">
-
-          <!-- Diagnostic Timeline -->
-          <div class="card card-timeline">
-            <div class="card-header">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-              <h2>Live Diagnostic Loop Timeline</h2>
-              <span class="badge badge-sm badge-blue" id="iteration-count-badge">2 Iterations</span>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Live Diagnostic Timeline</h2>
+              <span class="tag" id="iteration-count-badge">1 Iteration</span>
             </div>
+            <div class="timeline-container" id="timeline-list"></div>
+          </div>
 
-            <div class="timeline-container" id="timeline-list">
-              <!-- Rendered dynamically by JS -->
+          <div class="panel">
+            <div class="panel-head"><h2>Tool Calls & Evidence</h2></div>
+            <div id="tool-calls-container"></div>
+          </div>
+
+          <div class="panel panel-diagnosis">
+            <div class="panel-head">
+              <h2>AI Diagnosis</h2>
+              <span class="tag ok">Grounded in evidence</span>
+            </div>
+            <div class="diag-section">
+              <h3 class="diag-section-title">Diagnosis</h3>
+              <div class="diag-content-box" id="diag-title-content"></div>
+            </div>
+            <div class="diag-section">
+              <h3 class="diag-section-title">Root Cause</h3>
+              <div class="diag-content-box" id="diag-rootcause-content"></div>
+            </div>
+            <div class="diag-section">
+              <h3 class="diag-section-title">Evidence</h3>
+              <ul class="evidence-list" id="diag-evidence-list"></ul>
+            </div>
+            <div class="diag-section">
+              <h3 class="diag-section-title">Recommended Next Step</h3>
+              <div class="recommendation-box" id="diag-recommendation-content"></div>
             </div>
           </div>
 
-          <!-- Tool Calls & Provider Evidence -->
-          <div class="card card-evidence-wrapper">
-            <div class="card-header">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
-              <h2>Generated Tool Calls & Kubernetes Evidence</h2>
-            </div>
-            
-            <div id="tool-calls-container">
-              <!-- Rendered dynamically by JS -->
-            </div>
-          </div>
-
-          <!-- Final AI Diagnosis Card -->
-          <div class="card card-diagnosis-main">
-            <div class="diagnosis-banner">
-              <div class="banner-icon">🤖</div>
-              <div class="banner-text">
-                <h2>AI Diagnosis Report</h2>
-                <span class="banner-subtitle">Grounded in Empirical Provider Evidence</span>
-              </div>
-            </div>
-
-            <div class="diagnosis-body">
-              <div class="diag-section">
-                <h3 class="diag-section-title">
-                  <span class="section-bullet">📌</span> Diagnosis
-                </h3>
-                <div class="diag-content-box" id="diag-title-content">
-                  <!-- Filled by JS -->
-                </div>
-              </div>
-
-              <div class="diag-section">
-                <h3 class="diag-section-title">
-                  <span class="section-bullet">🔎</span> Evidence
-                </h3>
-                <ul class="evidence-list" id="diag-evidence-list">
-                  <!-- Filled by JS -->
-                </ul>
-              </div>
-
-              <div class="diag-section">
-                <h3 class="diag-section-title">
-                  <span class="section-bullet">💡</span> Recommended Next Step
-                </h3>
-                <div class="recommendation-box" id="diag-recommendation-content">
-                  <!-- Filled by JS -->
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Raw Response & Debugging Telemetry -->
-          <details class="card card-raw-debug">
-            <summary class="card-header summary-header">
-              <div class="summary-title">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
-                <span>Raw Model Response & Telemetry</span>
-              </div>
-              <span class="badge badge-sm">Debug / Audit</span>
+          <details class="panel">
+            <summary class="panel-head summary-header">
+              <span class="summary-title">Investigation details / raw response</span>
+              <span class="tag">Debug</span>
             </summary>
-            <div class="raw-content">
-              <pre id="raw-model-response" class="code-block"></pre>
-            </div>
+            <pre id="raw-model-response" class="code-block"></pre>
           </details>
-
-        </div> <!-- /state-results -->
-
-        <!-- Error Card -->
-        <div id="state-error" class="card card-error-box hidden">
-          <div class="error-header">
-            <span class="error-icon">⚠️</span>
-            <h3 id="error-title">Diagnostic Execution Error</h3>
-          </div>
-          <p id="error-message" class="error-message-text"></p>
-          <div class="error-suggestions">
-            <strong>Suggestions:</strong>
-            <ul>
-              <li>Ensure target namespace and pod exist in the cluster.</li>
-              <li>Verify KUBECONFIG connectivity if using local-kubernetes provider.</li>
-              <li>Try switching to Fake Provider for instant offline demo.</li>
-            </ul>
-          </div>
         </div>
 
+        <div id="state-error" class="panel card-error hidden">
+          <div class="error-header"><span>⚠</span><h3 id="error-title">Diagnostic error</h3></div>
+          <p id="error-message"></p>
+          <div class="muted">Check namespace/pod names, KUBECONFIG connectivity, and provider selection.</div>
+        </div>
       </section>
     </main>
 
-    <!-- Footer -->
     <footer class="app-footer">
-      <p>stack8s-ai-diagnose Feature 22 MVP Runtime Integration • Needle 3 F19 Checkpoint • InfrastructureProvider Abstraction</p>
+      <p>KORDIN · AI Diagnose · Needle 3 F19 · InfrastructureProvider</p>
     </footer>
-
   </div>
-
   <script src="app.js"></script>
 </body>
 </html>

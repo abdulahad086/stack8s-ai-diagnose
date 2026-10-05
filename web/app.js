@@ -28,17 +28,17 @@ function applyPreset(presetType) {
   const qInput = document.getElementById("input-question");
 
   if (presetType === "imagepull") {
-    nsInput.value = "default";
-    podInput.value = "f18-imagepull-001";
-    qInput.value = "Why is pod f18-imagepull-001 failing in namespace default?";
+    nsInput.value = "ai-diagnose-test";
+    podInput.value = "imagepull-test";
+    qInput.value = "Why is this pod not starting?";
   } else if (presetType === "healthy") {
-    nsInput.value = "default";
-    podInput.value = "f18-healthy-nginx-001";
-    qInput.value = "What is the status of pod f18-healthy-nginx-001 in namespace default?";
+    nsInput.value = "monitoring";
+    podInput.value = "prometheus-server-0";
+    qInput.value = "What is the health of this pod?";
   } else if (presetType === "oom") {
-    nsInput.value = "default";
-    podInput.value = "f18-oom-001";
-    qInput.value = "Why did pod f18-oom-001 crash in namespace default?";
+    nsInput.value = "ai-diagnose-test";
+    podInput.value = "oom-test";
+    qInput.value = "Why is this pod not running correctly?";
   }
 }
 
@@ -218,6 +218,13 @@ function renderDiagnosisResults(data) {
           `Step ${idx + 3}: Provider Evidence Collected (${step.tool})`,
           hasErr ? `Error: ${step.error}` : `Retrieved empirical evidence via ${data.provider}`
         );
+      } else if (step.type === "skipped") {
+        appendTimelineItem(
+          timelineList,
+          "error",
+          `Step ${idx + 3}: Skipped (${step.tool})`,
+          step.reason || "Tool skipped by diagnostic loop"
+        );
       }
     });
   }
@@ -282,7 +289,10 @@ function renderDiagnosisResults(data) {
   const diagEvidenceList = document.getElementById("diag-evidence-list");
   const diagRecContent = document.getElementById("diag-recommendation-content");
 
-  diagTitleContent.textContent = diagObj.diagnosis || data.final_diagnosis_text || "Workload failure analyzed.";
+  diagTitleContent.textContent = diagObj.diagnosis || data.final_diagnosis_text || "Unable to establish root cause from evidence.";
+
+  const rootCauseEl = document.getElementById("diag-rootcause-content");
+  if (rootCauseEl) rootCauseEl.textContent = diagObj.root_cause || "—";
 
   diagEvidenceList.innerHTML = "";
   const evArray = diagObj.evidence || [];
