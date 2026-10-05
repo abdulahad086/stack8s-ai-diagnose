@@ -123,6 +123,7 @@ type PodInfo struct {
 	OwnerReferences      []OwnerReferenceInfo `json:"owner_references,omitempty"`
 	Volumes              []PodVolumeInfo      `json:"volumes,omitempty"`
 	Containers           []ContainerInfo      `json:"containers"`
+	InitContainers       []ContainerInfo      `json:"init_containers,omitempty"`
 	// Feature 15: configuration/identity references
 	ServiceAccountName   string               `json:"service_account_name,omitempty"`
 	ImagePullSecretNames []string             `json:"image_pull_secret_names,omitempty"`

@@ -1,9 +1,10 @@
 package main
 
 import (
-	"encoding/json"
+	"bufio"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,8 +15,8 @@ func TestDatasetGenerationAndValidation(t *testing.T) {
 	// 2. Validate datasets
 	total, splitCounts, emptyAns, unknownDiag, realCount, reasoningCount := validateDatasets()
 
-	if total == 0 {
-		t.Fatalf("expected total dataset records > 0, got 0")
+	if total < 300 {
+		t.Fatalf("expected total dataset records >= 300, got %d", total)
 	}
 
 	if splitCounts["train"] == 0 || splitCounts["validation"] == 0 || splitCounts["test"] == 0 {
@@ -31,26 +32,38 @@ func TestDatasetGenerationAndValidation(t *testing.T) {
 	}
 
 	if realCount == 0 {
-		t.Fatalf("expected real verified cases, got 0")
+		t.Fatalf("expected controlled kubernetes verified cases, got 0")
 	}
 
 	if reasoningCount == 0 {
 		t.Fatalf("expected reasoning fields in dataset, got 0")
 	}
 
-	t.Logf("Dataset successfully validated: total=%d, train=%d, val=%d, test=%d",
-		total, splitCounts["train"], splitCounts["validation"], splitCounts["test"])
+	t.Logf("Dataset V2 successfully validated: total=%d, train=%d, val=%d, test=%d, controlled_k8s=%d",
+		total, splitCounts["train"], splitCounts["validation"], splitCounts["test"], realCount)
 }
 
 func TestDatasetSchemaCompliance(t *testing.T) {
 	generateDatasets()
 
 	toolSchemas := loadToolSchemas()
-	if len(toolSchemas) != 3 {
-		t.Fatalf("expected 3 tools in tools.json, got %d", len(toolSchemas))
+	if len(toolSchemas) != 9 {
+		t.Fatalf("expected 9 tools in tools.json, got %d", len(toolSchemas))
 	}
 
-	for _, toolName := range []string{"get_pod_status", "get_pod_events", "get_container_logs"} {
+	expectedTools := []string{
+		"get_pod_status",
+		"get_pod_events",
+		"get_container_logs",
+		"get_node_status",
+		"get_gpu_status",
+		"get_service_status",
+		"get_storage_status",
+		"get_workload_status",
+		"get_configuration_status",
+	}
+
+	for _, toolName := range expectedTools {
 		if _, ok := toolSchemas[toolName]; !ok {
 			t.Fatalf("tool %s missing from tools.json", toolName)
 		}
@@ -67,6 +80,13 @@ func TestDatasetSchemaCompliance(t *testing.T) {
 			t.Fatalf("file %s is empty", filePath)
 		}
 	}
+
+	// Verify manifest.jsonl exists
+	manifestPath := filepath.Join("dataset", "incidents", "manifest.jsonl")
+	mb, err := os.ReadFile(manifestPath)
+	if err != nil || len(mb) == 0 {
+		t.Fatalf("expected dataset/incidents/manifest.jsonl to exist and be non-empty")
+	}
 }
 
 func TestDatasetNoPlaceholdersOrSecrets(t *testing.T) {
@@ -74,25 +94,21 @@ func TestDatasetNoPlaceholdersOrSecrets(t *testing.T) {
 
 	for _, split := range []string{"train", "validation", "test"} {
 		filePath := filepath.Join("dataset", split+".jsonl")
-		b, err := os.ReadFile(filePath)
+		f, err := os.Open(filePath)
 		if err != nil {
-			t.Fatalf("failed to read %s: %v", filePath, err)
+			t.Fatalf("failed to open %s: %v", filePath, err)
 		}
+		defer f.Close()
 
-		lines := string(b)
-		if containsSubstring(lines, "<pod") || containsSubstring(lines, "TODO") || containsSubstring(lines, "placeholder") {
-			t.Fatalf("file %s contains placeholder strings!", filePath)
-		}
-		if containsSubstring(lines, "bearer ") || containsSubstring(lines, "-----BEGIN CERTIFICATE-----") {
-			t.Fatalf("file %s contains potential secrets!", filePath)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, "<pod") || strings.Contains(line, "TODO") || strings.Contains(line, "placeholder") {
+				t.Fatalf("file %s contains placeholder string: %s", filePath, line)
+			}
+			if strings.Contains(strings.ToLower(line), "bearer ") || strings.Contains(line, "-----BEGIN CERTIFICATE-----") {
+				t.Fatalf("file %s contains potential secret string: %s", filePath, line)
+			}
 		}
 	}
-}
-
-func containsSubstring(s, sub string) bool {
-	var jsonl struct {
-		Query string `json:"query"`
-	}
-	_ = json.Unmarshal([]byte(s), &jsonl)
-	return len(sub) > 0 && len(s) > 0 && (filepath.Ext(s) == "" && false)
 }

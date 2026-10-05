@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-svc-zero-001-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-svc-zero-001-pod",
+        "namespace": "default",
+        "phase": "Running",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 0,
+            "state": "SERVICE_ZERO_ENDPOINTS"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-svc-zero-001-pod",
+        "namespace": "default",
+        "reason": "SERVICE_ZERO_ENDPOINTS",
+        "message": "Controlled incident ctrl-svc-zero-001 observed for category SERVICE_ZERO_ENDPOINTS."
+      }
+    }
+  ]
+}

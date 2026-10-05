@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-sched-node-002-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-sched-node-002-pod",
+        "namespace": "default",
+        "phase": "Pending",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 0,
+            "state": "PENDING_NODE_CONSTRAINT"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-sched-node-002-pod",
+        "namespace": "default",
+        "reason": "NODE_SELECTOR_MISMATCH",
+        "message": "Controlled incident ctrl-sched-node-002 observed for category PENDING_NODE_CONSTRAINT."
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-oom-001-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-oom-001-pod",
+        "namespace": "default",
+        "phase": "Failed",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 0,
+            "state": "OOM_KILLED"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-oom-001-pod",
+        "namespace": "default",
+        "reason": "OOM_KILLED",
+        "message": "Controlled incident ctrl-oom-001 observed for category OOM_KILLED."
+      }
+    }
+  ]
+}

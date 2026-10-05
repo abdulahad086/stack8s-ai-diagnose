@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-crash-004-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-crash-004-pod",
+        "namespace": "default",
+        "phase": "Running",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 5,
+            "state": "CRASH_LOOP"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-crash-004-pod",
+        "namespace": "default",
+        "reason": "CRASH_LOOP_BACKOFF",
+        "message": "Controlled incident ctrl-crash-004 observed for category CRASH_LOOP."
+      }
+    }
+  ]
+}

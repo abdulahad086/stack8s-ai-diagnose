@@ -1,0 +1,35 @@
+{
+  "pod_name": "workload-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "workload-pod",
+        "namespace": "default",
+        "phase": "Running",
+        "containers": [
+          {
+            "name": "app",
+            "image": "nginx:alpine",
+            "ready": true,
+            "restart_count": 0,
+            "state": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "workload-pod",
+        "namespace": "default",
+        "reason": "NONE",
+        "message": "Controlled incident ctrl-healthy-dep-001 observed for category HEALTHY_POD."
+      }
+    }
+  ]
+}

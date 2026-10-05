@@ -70,5 +70,134 @@
         "container"
       ]
     }
+  },
+  {
+    "name": "get_node_status",
+    "description": "Retrieve node capacity, allocatable CPU and memory resources, conditions, and system metadata for a cluster node.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "node_name": {
+          "type": "string",
+          "description": "The name of the target node."
+        }
+      },
+      "required": [
+        "node_name"
+      ]
+    }
+  },
+  {
+    "name": "get_gpu_status",
+    "description": "Retrieve extended GPU resource capacity, allocatable quantities, and GPU model details for a cluster node.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "node_name": {
+          "type": "string",
+          "description": "The name of the target node."
+        }
+      },
+      "required": [
+        "node_name"
+      ]
+    }
+  },
+  {
+    "name": "get_service_status",
+    "description": "Retrieve Kubernetes Service metadata, ClusterIP, exposed ports, endpoint addresses, and selector matching status for a workload or service.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "The Kubernetes namespace of the service or pod."
+        },
+        "pod": {
+          "type": "string",
+          "description": "The target pod name to evaluate against matching service selectors."
+        },
+        "service_name": {
+          "type": "string",
+          "description": "The name of the target Kubernetes service."
+        }
+      },
+      "required": [
+        "namespace"
+      ]
+    }
+  },
+  {
+    "name": "get_storage_status",
+    "description": "Retrieve PVC phase, bound PV details, capacity, volume mode, and StorageClass binding configuration for pod storage volumes.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "The Kubernetes namespace of the target pod or PVC."
+        },
+        "pod": {
+          "type": "string",
+          "description": "The target pod referencing persistent volume claims."
+        },
+        "pvc_name": {
+          "type": "string",
+          "description": "The target PersistentVolumeClaim name."
+        }
+      },
+      "required": [
+        "namespace"
+      ]
+    }
+  },
+  {
+    "name": "get_workload_status",
+    "description": "Retrieve controller ownership chain, desired vs ready replicas, rollout strategy, and controller conditions for a workload.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "The Kubernetes namespace of the workload."
+        },
+        "pod": {
+          "type": "string",
+          "description": "The target pod name whose managing controller is being inspected."
+        },
+        "workload_kind": {
+          "type": "string",
+          "description": "The workload controller kind (e.g. Deployment, StatefulSet, DaemonSet, Job)."
+        },
+        "workload_name": {
+          "type": "string",
+          "description": "The name of the target workload controller."
+        }
+      },
+      "required": [
+        "namespace"
+      ]
+    }
+  },
+  {
+    "name": "get_configuration_status",
+    "description": "Retrieve configuration reference status for ConfigMaps, Secret key metadata (zero raw secrets), ServiceAccounts, and image pull secrets.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "The Kubernetes namespace of the target pod."
+        },
+        "pod": {
+          "type": "string",
+          "description": "The target pod referencing ConfigMaps, Secrets, or ServiceAccounts."
+        }
+      },
+      "required": [
+        "namespace",
+        "pod"
+      ]
+    }
   }
 ]

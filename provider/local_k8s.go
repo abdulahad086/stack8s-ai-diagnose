@@ -369,6 +369,33 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			containers = append(containers, ci)
 		}
 
+		initStatusMap := make(map[string]corev1.ContainerStatus, len(pod.Status.InitContainerStatuses))
+		for _, cs := range pod.Status.InitContainerStatuses {
+			initStatusMap[cs.Name] = cs
+		}
+		var initContainers []ContainerInfo
+		for _, c := range pod.Spec.InitContainers {
+			ici := ContainerInfo{Name: c.Name, Image: c.Image}
+			if cs, ok := initStatusMap[c.Name]; ok {
+				ici.Ready = cs.Ready
+				ici.RestartCount = cs.RestartCount
+				ici.State = containerStateString(cs.State)
+				if cs.LastTerminationState.Terminated != nil {
+					lt := cs.LastTerminationState.Terminated
+					reason := lt.Reason
+					if reason == "" {
+						reason = "Unknown"
+					}
+					ici.HasLastTermination = true
+					ici.LastTermReason = reason
+					ici.LastTermExitCode = lt.ExitCode
+				}
+			} else {
+				ici.State = "no status available"
+			}
+			initContainers = append(initContainers, ici)
+		}
+
 		var volumes []PodVolumeInfo
 		for _, v := range pod.Spec.Volumes {
 			volInfo := PodVolumeInfo{Name: v.Name}
@@ -522,6 +549,7 @@ func (p *LocalKubernetesProvider) GetPods(ctx context.Context, namespace string)
 			OwnerReferences:      ownerRefs,
 			Volumes:              volumes,
 			Containers:           containers,
+			InitContainers:       initContainers,
 			ServiceAccountName:   pod.Spec.ServiceAccountName,
 			ImagePullSecretNames: ipsNames,
 			EnvRefs:              envRefs,

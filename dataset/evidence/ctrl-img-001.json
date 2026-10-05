@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-img-001-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-img-001-pod",
+        "namespace": "default",
+        "phase": "Pending",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 0,
+            "state": "IMAGE_PULL_FAILURE"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-img-001-pod",
+        "namespace": "default",
+        "reason": "IMAGE_PULL_FAILURE",
+        "message": "Controlled incident ctrl-img-001 observed for category IMAGE_PULL_FAILURE."
+      }
+    }
+  ]
+}

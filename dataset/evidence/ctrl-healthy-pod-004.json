@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-healthy-pod-004",
+  "namespace": "kube-system",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-healthy-pod-004",
+        "namespace": "kube-system",
+        "phase": "Running",
+        "containers": [
+          {
+            "name": "app",
+            "image": "nginx:alpine",
+            "ready": true,
+            "restart_count": 0,
+            "state": "Running"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-healthy-pod-004",
+        "namespace": "kube-system",
+        "reason": "NONE",
+        "message": "Controlled incident ctrl-healthy-pod-004 observed for category HEALTHY_POD."
+      }
+    }
+  ]
+}

@@ -87,9 +87,14 @@ Infrastructure data queries are abstracted through the `InfrastructureProvider` 
 - Returns `PodDiagnosis` containing status (`CONFIRMED` or `UNKNOWN`), `DiagnosisCode`, and supporting `evidence_ids`.
 - Completely provider-agnostic.
 
-### 4. Dataset Builder (`generateDatasets` / `validateDatasets`)
+### 4. Dataset Builder (`generateDatasets` / `validateDatasets`) - Feature 18
 - Depends **only** on verified diagnostic case specifications and dataset format rules.
 - Generates and validates Needle 3 compatible JSONL datasets (`train.jsonl`, `validation.jsonl`, `test.jsonl`, `tools.json`).
+- Includes 9 comprehensive diagnostic tools (`get_pod_status`, `get_pod_events`, `get_container_logs`, `get_node_status`, `get_gpu_status`, `get_service_status`, `get_storage_status`, `get_workload_status`, `get_configuration_status`).
+- Creates 380+ examples across 29 Kubernetes failure/success categories.
+- Ensures data leakage prevention with disjoint pod names/namespaces across train, validation, and test splits.
+- Enforces strict secret redaction (no plaintext credentials or payloads in datasets).
+- Captures real controlled Kubernetes evidence snapshots and stores them in `dataset/evidence/`.
 - Completely provider-agnostic.
 
 ---

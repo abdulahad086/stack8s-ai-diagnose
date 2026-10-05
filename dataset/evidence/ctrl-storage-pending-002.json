@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-storage-pending-002-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-storage-pending-002-pod",
+        "namespace": "default",
+        "phase": "Pending",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 0,
+            "state": "PVC_PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-storage-pending-002-pod",
+        "namespace": "default",
+        "reason": "STORAGE_PROVISIONING_FAILED",
+        "message": "Controlled incident ctrl-storage-pending-002 observed for category PVC_PENDING."
+      }
+    }
+  ]
+}

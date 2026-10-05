@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-config-sec-001-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-config-sec-001-pod",
+        "namespace": "default",
+        "phase": "Running",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 0,
+            "state": "CONFIG_MISSING_SECRET"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-config-sec-001-pod",
+        "namespace": "default",
+        "reason": "SECRET_NOT_FOUND",
+        "message": "Controlled incident ctrl-config-sec-001 observed for category CONFIG_MISSING_SECRET."
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "pod_name": "ctrl-unknown-ambig-002-pod",
+  "namespace": "default",
+  "captured_at": "2026-10-01T12:00:00Z",
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "pod_status",
+      "data": {
+        "pod_name": "ctrl-unknown-ambig-002-pod",
+        "namespace": "default",
+        "phase": "Running",
+        "containers": [
+          {
+            "name": "app",
+            "image": "invalid-image:v1",
+            "ready": false,
+            "restart_count": 0,
+            "state": "UNKNOWN"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E2",
+      "source": "kubernetes_event",
+      "data": {
+        "pod_name": "ctrl-unknown-ambig-002-pod",
+        "namespace": "default",
+        "reason": "UNKNOWN",
+        "message": "Controlled incident ctrl-unknown-ambig-002 observed for category UNKNOWN."
+      }
+    }
+  ]
+}

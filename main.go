@@ -40,8 +40,10 @@ func getProvider() provider.InfrastructureProvider {
 			os.Exit(1)
 		}
 		return prov
+	case "fake", "mock":
+		return provider.NewFakeProvider()
 	default:
-		fmt.Fprintf(os.Stderr, "ERROR: unknown provider %q. Supported providers: local-kubernetes, stack8s\n", providerType)
+		fmt.Fprintf(os.Stderr, "ERROR: unknown provider %q. Supported providers: local-kubernetes, stack8s, fake\n", providerType)
 		os.Exit(1)
 		return nil
 	}

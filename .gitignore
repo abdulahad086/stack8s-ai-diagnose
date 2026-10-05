@@ -7,3 +7,13 @@ k8s-check
 
 # macOS
 .DS_Store
+
+# Feature 19 — Needle 3 model artifacts
+checkpoints/
+models/needle3/run-*/adapter.safetensors
+models/needle3/run-*/*.cact
+models/needle3/run-*/checkpoint_*/
+venv/
+*.log
+__pycache__/
+models/needle3/baseline/

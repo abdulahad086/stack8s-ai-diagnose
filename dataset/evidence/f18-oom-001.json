@@ -1,0 +1,6 @@
+{
+  "cluster": "https://127.0.0.1:6443",
+  "namespace": "default",
+  "collected_at": "2026-10-05T10:54:46Z",
+  "pods": null
+}
