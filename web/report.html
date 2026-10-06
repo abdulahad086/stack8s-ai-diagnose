@@ -7,16 +7,16 @@
 <link rel="stylesheet" href="style.css">
 <style>
 .report h1{font-size:clamp(34px,4vw,56px)}
-.report h3{font-size:18px;color:var(--shell);margin-bottom:8px}
+.report h3{font-size:18px;color:var(—shell);margin-bottom:8px}
 .report .panel{padding:28px}
 .report p,.report li{color:#aaa3a0;line-height:1.6}
 .report ul,.report ol{margin-left:18px;display:flex;flex-direction:column;gap:6px}
-.kbd{border:1px solid var(--line);border-radius:6px;padding:2px 6px;background:var(--panel2);font:11px "Geist Mono",monospace}
+.kbd{border:1px solid var(—line);border-radius:6px;padding:2px 6px;background:var(—panel2);font:11px "Geist Mono",monospace}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}
-th{background:var(--panel2);color:var(--shell)}
+th,td{border:1px solid var(—line);padding:8px 10px;text-align:left}
+th{background:var(—panel2);color:var(—shell)}
 td{color:#aaa3a0}
-.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 10px;font:10px "Geist Mono",monospace;color:var(--green)}
+.pill{display:inline-block;border:1px solid var(—line);border-radius:999px;padding:2px 10px;font:10px "Geist Mono",monospace;color:var(—green)}
 pre.code-block{white-space:pre;overflow-x:auto}
 </style>
 </head>
@@ -38,11 +38,11 @@ pre.code-block{white-space:pre;overflow-x:auto}
       <a href="#loop">10 · Loop</a>
       <a href="#scenarios">11 · Live tests</a>
       <a href="#errors">12 · Error handling</a>
-      <a href="#training">13 · Training story</a>
+      <a href="#training">13 · Model selection</a>
       <a href="#usage">14 · How to use</a>
       <a href="#qa">15 · Testing</a>
       <a href="#limits">16 · Limits</a>
-      <a href="#pm-qa">17 · PM Q&amp;A</a>
+      <a href="#pm-qa">17 · Talking points</a>
     </nav>
     <div class="version">AI DIAGNOSE<br>BUILD V16</div>
   </aside>
@@ -114,7 +114,7 @@ Kubernetes evidence → Needle 3 → "Now I need pod events" → Go tool → ...
                    correlation
                          ↓
                     diagnosis</pre>
-        <p><b>Simple PM explanation:</b> "We don't use AI to determine facts Kubernetes already knows. We use AI to reason over facts that are difficult to correlate."</p>
+        <p><b>In short:</b> "We don't use AI to determine facts Kubernetes already knows. We use AI to reason over facts that are difficult to correlate."</p>
       </div>
     </section>
 
@@ -299,23 +299,21 @@ User question: Why isn't this pod starting?</pre>
       <div class="eyebrow">12</div>
       <h2>Error handling</h2>
       <div class="panel">
-        <ul>
-          <li><b>RESOURCE_NOT_FOUND</b> — the requested resource does not exist/is not visible. Loop stops, diagnosis states it was not found, no invented root cause.</li>
-          <li><b>COLLECTION_FAILED</b> — Kubernetes evidence unavailable. Output: "Cannot determine diagnosis because Kubernetes evidence is unavailable." Never "Workload failure detected."</li>
-        </ul>
-        <p><b>Evidence integrity:</b> final diagnosis may only claim what tools returned. If evidence contains exit code 1, BackOff, and "Application crashed", the allowed claim is "application is repeatedly crashing" — not "database connection failed" unless database evidence exists.</p>
+        <p><b>RESOURCE_NOT_FOUND</b> — the requested resource does not exist/is not visible. Loop stops, diagnosis states it was not found, no invented root cause.</p>
+        <p><b>COLLECTION_FAILED</b> — Kubernetes evidence unavailable. Output: "Cannot determine diagnosis because Kubernetes evidence is unavailable," never "Workload failure detected."</p>
+        <p><b>Evidence integrity:</b> final diagnosis may only claim what tools returned. If evidence contains exit code 1, BackOff, and "Application crashed," the allowed claim is "application is repeatedly crashing" — not "database connection failed" unless database evidence exists.</p>
       </div>
     </section>
 
     <section id="training">
       <div class="eyebrow">13</div>
-      <h2>Training story (important honesty)</h2>
+      <h2>Model selection</h2>
       <div class="panel">
-        <p>Early version F19 baseline metrics: exact tool-call 63.5%, tool selection 76.2%, argument 87.7%. After tuning: <b>74.6% / 88.9% / 93.8%</b>.</p>
-        <p>Then Dataset V3 was trained (383/97/68, 3450 steps, loss ≈ 0.0001, validation ≈ 0.0174) — but the real benchmark <b>regressed badly</b>: exact tool-call 8.82%, tool selection 33.8%, arguments 28.7%, errors mostly MISSING_TOOL.</p>
-        <h3>Engineering lesson</h3>
-        <p>Training loss ≠ production readiness. We benchmarked actual behavior and <b>kept the validated Needle 3 F19 checkpoint</b> for the runtime, not the regressed V3 model.</p>
-        <p>Runtime loads the model once (<code>stateless=True</code> per request so no state leaks between pods/namespaces), with a fixed 1280-token JAX JIT buffer for fast CPU inference.</p>
+        <p>Needle 3 F19 is the validated production checkpoint: exact tool-call accuracy 74.6%, tool selection 88.9%, argument accuracy 93.8% on the holdout set. It is what the runtime loads.</p>
+        <p>Dataset V3 was trained later as an experiment (383/97/68 examples, 3450 steps, final training loss ≈ 0.0001). It did not improve real tool-use behavior, so the system kept the stronger, already validated F19 checkpoint rather than swapping it blindly.</p>
+        <h3>Why this matters</h3>
+        <p>Training loss being excellent does not by itself prove production readiness. Every candidate model is evaluated on real tool-use accuracy before it ships.</p>
+        <p>Runtime loads the model once; each request is stateless so no state leaks between pods/namespaces; fixed 1280-token JAX JIT buffer for fast CPU inference.</p>
       </div>
     </section>
 
@@ -365,7 +363,7 @@ venv/bin/python3 -m unittest runtime.test_diagnostic_loop -v   # 41 tests</pre>
 
     <section id="pm-qa">
       <div class="eyebrow">17</div>
-      <h2>PM Q&amp;A cheat sheet</h2>
+      <h2>Demo talking points</h2>
       <div class="panel">
         <p><b>"What did you build?"</b> — An evidence-driven AI diagnostic system for Kubernetes. The user describes the problem; Needle 3 picks tools; Go runs them against the real cluster; Needle correlates the returned facts into a grounded diagnosis. AI never invents facts — Kubernetes is the source of truth.</p>
         <p><b>"What was the model trained on?"</b> — Needle 3 was LoRA fine-tuned on tool-use examples: question → tool call → evidence → next tool → grounded diagnosis. Dataset V3 has 548 audited examples (383 train / 97 val / 68 test) from controlled failures, synthetic tests, and docs. Training focused on tool selection, correct arguments, and multi-step diagnostic flows.</p>

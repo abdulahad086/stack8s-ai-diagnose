@@ -1,0 +1,1 @@
+Stack8s AI Diagnose — ask a Kubernetes question in plain English and it investigates live: Needle 3 picks the right tools, Go runs them against your real cluster, and you get a grounded root cause (exit code 1, BackOff, logs) — no hallucinated facts.
