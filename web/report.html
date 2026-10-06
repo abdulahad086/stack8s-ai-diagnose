@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Diagnose — Project Report</title>
+<title>AI Diagnose — Complete Demo Report</title>
 <link rel="stylesheet" href="style.css">
 <style>
 .report h1{font-size:clamp(34px,4vw,56px)}
@@ -17,6 +17,7 @@ th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}
 th{background:var(--panel2);color:var(--shell)}
 td{color:#aaa3a0}
 .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 10px;font:10px "Geist Mono",monospace;color:var(--green)}
+pre.code-block{white-space:pre;overflow-x:auto}
 </style>
 </head>
 <body>
@@ -25,106 +26,144 @@ td{color:#aaa3a0}
     <div class="side-logo">AI DIAGNOSE</div>
     <div class="nav-head">REPORT</div>
     <nav class="nav">
-      <a href="#overview">Overview</a>
-      <a href="#model">Model</a>
-      <a href="#why">Why this design</a>
-      <a href="#arch">Architecture</a>
-      <a href="#flow">How it works</a>
-      <a href="#vsdet">vs Deterministic</a>
-      <a href="#tools">Tools</a>
-      <a href="#accuracy">Accuracy & Safety</a>
-      <a href="#usage">How to use</a>
-      <a href="#tests">Testing</a>
-      <a href="#limits">Limitations</a>
+      <a href="#overview">1 · Problem</a>
+      <a href="#goal">2 · Goal</a>
+      <a href="#needle">3 · Why Needle 3</a>
+      <a href="#no-rules">4 · Why not rules</a>
+      <a href="#history">5 · Build history</a>
+      <a href="#dataset">6 · Dataset</a>
+      <a href="#tools">7 · 9 tools</a>
+      <a href="#provider">8 · Provider</a>
+      <a href="#arch">9 · Architecture</a>
+      <a href="#loop">10 · Loop</a>
+      <a href="#scenarios">11 · Live tests</a>
+      <a href="#errors">12 · Error handling</a>
+      <a href="#training">13 · Training story</a>
+      <a href="#usage">14 · How to use</a>
+      <a href="#qa">15 · Testing</a>
+      <a href="#limits">16 · Limits</a>
+      <a href="#pm-qa">17 · PM Q&amp;A</a>
     </nav>
     <div class="version">AI DIAGNOSE<br>BUILD V16</div>
   </aside>
 
   <main class="report">
+
     <section id="overview">
-      <div class="eyebrow">PROJECT REPORT</div>
-      <h1>AI Diagnose for stack8s</h1>
-      <p>AI Diagnose is an AI-driven Kubernetes diagnostic system for Stack8s clusters. It turns a natural-language question about a namespace/pod into a grounded, evidence-backed diagnosis — collecting real cluster state via a provider boundary, attributing root causes correctly, and never inventing facts.</p>
-      <p><span class="pill">Go · Python · Needle 3 F19 · client-go · KORDIN-style UI</span></p>
-    </section>
-
-    <section id="model">
-      <div class="eyebrow">MODEL</div>
-      <h2>What model we use & how it was built</h2>
+      <div class="eyebrow">1</div>
+      <h2>The problem</h2>
       <div class="panel">
-        <h3>Needle 3 — F19</h3>
-        <p>Needle 3 is a small JAX-based language model. The F19 checkpoint (<span class="kbd">checkpoints/needle3.safetensors</span>, ~231 MB) is the validated production model used at runtime; it was fine-tuned, not trained from scratch.</p>
-        <h3>Training data</h3>
-        <p>Built from real cluster incidents collected with the deterministic pipeline (F1–F15): pod status, events, logs, node/GPU/service/storage/workload/config evidence. Each record follows the official Needle JSONL schema (question → tool calls → evidence → grounded diagnosis), with secrets redacted, no leakage between train/validation/test pod contexts, and split 63% / 18.5% / 18.5%.</p>
-        <h3>Fine-tuning</h3>
-        <p>LoRA adapters trained on Kaggle T4 via <span class="kbd">feature19_needle3_kaggle.ipynb</span> (10 epochs on <span class="kbd">dataset/train.jsonl</span>), then exported to the single safetensors checkpoint used at runtime. Evaluation used the holdout test split and the <span class="kbd">benchmark.py</span> tooling.</p>
-        <h3>What the model sees at runtime</h3>
-        <p>A compact prompt: the user question, the explicit target (namespace/pod), the tool JSON schema, and a bounded summary (~2000 chars) of the real provider evidence collected in Phase 2. It does not see kubeconfig, credentials, or secrets. Runtime buffer is fixed at 1280 tokens for fast CPU inference; JAX JIT is warmed up once at server start (~30–60s).</p>
+        <p>When a Kubernetes workload fails, an operator manually checks: pod status → events → container logs → node → deployment → service → PVC → ConfigMap/Secret — and only then forms a root cause. "Why isn't my application starting?" cannot be answered from pod status alone.</p>
+        <p>The same symptom has many causes. Pod = <b>CrashLoopBackOff</b> could mean: application exit code 1, OOMKilled, liveness probe failure, configuration error, dependency failure, init container failure. So a fixed rule like <code>if CrashLoopBackOff → application crashed</code> is unreliable.</p>
       </div>
     </section>
 
-    <section id="why">
-      <div class="eyebrow">DESIGN RATIONALE</div>
-      <h2>Why this architecture was chosen</h2>
+    <section id="goal">
+      <div class="eyebrow">2</div>
+      <h2>Our goal</h2>
       <div class="panel">
-        <ul>
-          <li><b>Small LLM + deterministic orchestration.</b> Needle 3 is good at language, not at cluster truth. So all truth comes from the InfrastructureProvider; the model only rephrases/frames evidence. This is what makes the system hallucination-resistant.</li>
-          <li><b>Intent-aware deterministic planning.</b> Tool choice is computed from question intent (not left to the model), so the right tools run every time — GPU questions get GPU tools, not CrashLoop noise.</li>
-          <li><b>Causal evidence hierarchy.</b> Specific causal evidence (termination reason, exit code, FailedScheduling, CreateContainerConfigError, probe events) outranks generic pod phase, so Pending/CrashLoopBackOff are never assumed to equal their common causes.</li>
-          <li><b>Provider boundary.</b> One interface isolates client-go from reasoning, enabling Fake provider tests and a future Stack8s provider with zero reasoning changes.</li>
-          <li><b>Fail closed.</b> Missing resources, provider errors, and empty results produce honest answers, never invented diagnoses.</li>
-          <li><b>Compare to a deterministic script.</b> Scripts encode one answer per scenario; this system handles arbitrary namespaces/pods/questions because the reasoning layer is generic and the model only sees real, current evidence.</li>
-        </ul>
+        <p>A system where the user asks a natural question, and the AI decides what to investigate — then real Kubernetes evidence is collected and the AI reasons over that evidence.</p>
+        <pre class="code-block">User question
+   ↓
+AI understands intent
+   ↓
+AI selects tools
+   ↓
+Tools collect REAL Kubernetes evidence
+   ↓
+Evidence back to AI
+   ↓
+AI correlates
+   ↓
+Grounded diagnosis</pre>
+        <p>Key rule: <b>AI does not invent Kubernetes facts. Kubernetes provides the facts; AI reasons over them.</b></p>
       </div>
     </section>
 
-    <section id="arch">
-      <div class="eyebrow">ARCHITECTURE</div>
-      <h2>System</h2>
+    <section id="needle">
+      <div class="eyebrow">3</div>
+      <h2>Why Needle 3?</h2>
       <div class="panel">
-        <ul>
-          <li><b>Web UI / API</b> (<span class="kbd">runtime/server.py</span>) — serves the UI, <span class="kbd">POST /api/diagnose</span>, polls <span class="kbd">/api/diagnose/status</span>.</li>
-          <li><b>Diagnostic loop</b> (<span class="kbd">runtime/diagnostic_loop.py</span>) — intent analysis → deterministic tool plan → bridge → grounded synthesis.</li>
-          <li><b>Tool executor</b> (<span class="kbd">cmd/tool_exec</span>) — JSON in/out per tool call, JSON out, prints provider target.</li>
-          <li><b>Dispatcher</b> (<span class="kbd">provider/dispatcher.go</span>) — validates ToolCall, routes to provider methods (9 tools).</li>
-          <li><b>InfrastructureProvider</b> — boundary interface (22 methods); implementations: LocalKubernetes (client-go, only K8s imports), Fake (tests), Stack8s (future).</li>
-          <li><b>Needle 3 F19</b> — fine-tuned small LLM (<span class="kbd">checkpoints/needle3.safetensors</span>) used for tool-schema synthesis; runtime treats it as advisory while evidence rules decide.</li>
-        </ul>
+        <p>Needle 3 is the investigation brain. Its job is NOT to talk to Kubernetes directly. Instead:</p>
+        <pre class="code-block">Needle 3 → "I need pod status" → Go tool → Kubernetes API
+Kubernetes evidence → Needle 3 → "Now I need pod events" → Go tool → ...</pre>
+        <p>Needle 3 = brain. Kubernetes tools = hands/investigators. Go dispatcher and provider do the execution.</p>
       </div>
     </section>
 
-    <section id="flow">
-      <div class="eyebrow">RUNTIME FLOW</div>
-      <h2>How a diagnosis happens</h2>
+    <section id="no-rules">
+      <div class="eyebrow">4</div>
+      <h2>Why not just hard-coded rules?</h2>
       <div class="panel">
-        <ol>
-          <li>User supplies namespace + pod + question (+ provider) — target is propagated explicitly, never inferred from the question.</li>
-          <li>Phase 1: intent-aware deterministic plan selects relevant tools (pod status/events/logs only for crash questions; GPU/storage/service/config/workload/node for those domains).</li>
-          <li>Phase 2: tools execute via <span class="kbd">cmd/tool_exec</span>; container names and node names are discovered from evidence, never hardcoded. Pending/unscheduled pods skip log collection. <span class="kbd">RESOURCE_NOT_FOUND</span> short-circuits the investigation.</li>
-          <li>Bridge verifies the real cluster target (<span class="kbd">KUBECONFIG</span>, e.g. the Stack8s endpoint) before Needle synthesis.</li>
-          <li>Phase 3: causal synthesis ranks domain evidence first, then Pending→scheduled/unscheduled lattice, init containers, probes (liveness/readiness/startup distinctions), then crash/image/oom classification — citing evidence and recommending only from the proven cause.</li>
-        </ol>
+        <p>Deterministic rules are reliable when the signal is explicit: OOMKilled → memory, ImagePullBackOff → image, Node NotReady → node. But as combinations grow, an <code>if/else if</code> rule engine becomes huge and brittle.</p>
+        <p>So the final architecture is hybrid:</p>
+        <pre class="code-block">            Kubernetes
+                ↓
+        Trusted evidence
+                ↓
+        Deterministic signals
+                ↓
+        ┌────────┴────────┐
+        ↓                 ↓
+   Clear cause      Ambiguous case
+        ↓                 ↓
+ Direct diagnosis    Needle 3
+                         ↓
+                 more investigation
+                         ↓
+                   correlation
+                         ↓
+                    diagnosis</pre>
+        <p><b>Simple PM explanation:</b> "We don't use AI to determine facts Kubernetes already knows. We use AI to reason over facts that are difficult to correlate."</p>
       </div>
     </section>
 
-    <section id="vsdet">
-      <div class="eyebrow">COMPARISON</div>
-      <h2>AI runtime vs deterministic script</h2>
+    <section id="history">
+      <div class="eyebrow">5</div>
+      <h2>How the project was built (feature by feature)</h2>
       <div class="panel">
         <table>
-          <tr><th>Capability</th><th>Deterministic K8s script</th><th>AI Diagnose</th></tr>
-          <tr><td>Input</td><td>Requires explicit commands per scenario</td><td>Free-form question, target carried from context</td></tr>
-          <tr><td>Tool chain</td><td>Hardcoded per scenario</td><td>Intent-aware, evidence-adaptive chaining</td></tr>
-          <tr><td>Root cause</td><td>Template output</td><td>Causal ranking across status/events/logs/termination reasons</td></tr>
-          <tr><td>Missing resources</td><td>Exit code / empty list</td><td>Explicit "resource not found", no fabricated failure</td></tr>
-          <tr><td>Safety</td><td>—</td><td>Read-only; no secrets; uncertainty reported instead of guessing</td></tr>
-          <tr><td>Multi-container</td><td>Manual loop</td><td>Per-container attribution (app vs sidecar vs init)</td></tr>
+          <tr><th>Feature</th><th>What was added</th></tr>
+          <tr><td>F1</td><td>Real Kubernetes connection via client-go (without this, AI Diagnose would be theoretical)</td></tr>
+          <tr><td>F2</td><td>get_pod_status — pod name, phase, node, container states, restart count, termination reason, exit code, image</td></tr>
+          <tr><td>F3</td><td>get_pod_events — FailedScheduling, Failed to pull image, BackOff, Liveness probe failed, Killing container</td></tr>
+          <tr><td>F4</td><td>get_container_logs — application output</td></tr>
+          <tr><td>F5</td><td>Unified EvidencePackage: source/tool/namespace/resource/timestamp/data</td></tr>
+          <tr><td>F6</td><td>Controlled failures (e.g. image not found) for known-signal validation</td></tr>
+          <tr><td>F7</td><td>Deterministic baseline engine: OOM_KILLED / IMAGE_PULL_FAILURE / NODE_NOT_READY / UNKNOWN</td></tr>
+          <tr><td>F8</td><td>Dataset builder for Needle 3 fine-tuning</td></tr>
+          <tr><td>F9</td><td>InfrastructureProvider abstraction</td></tr>
+          <tr><td>F10–F15</td><td>Node/GPU/service/storage/workload/config collectors</td></tr>
+          <tr><td>F18</td><td>Audited Dataset V2/V3</td></tr>
+          <tr><td>F19</td><td>Needle 3 F19 LoRA fine-tune (Kaggle)</td></tr>
+          <tr><td>F22</td><td>Real-time runtime loop + web UI</td></tr>
         </table>
       </div>
     </section>
 
+    <section id="dataset">
+      <div class="eyebrow">6</div>
+      <h2>Dataset & what the model learned</h2>
+      <div class="panel">
+        <p>The key question was: <b>how do we teach Needle 3 to use Kubernetes diagnostic tools?</b> Answer: tool-use training examples.</p>
+        <pre class="code-block">User: Why is this pod failing?
+Model: get_pod_status(namespace=..., pod=...)
+Evidence: CrashLoopBackOff, container app, restarts 12, exit code 1
+Model: get_container_logs(namespace=..., pod=..., container="app")   ← correct container!</pre>
+        <p>Training focused on: tool selection, argument generation, evidence-based next-tool decisions, and multi-step diagnostic flows — not just Kubernetes knowledge.</p>
+        <h3>Audited Dataset V3</h3>
+        <table>
+          <tr><th>Split</th><th>Count</th></tr>
+          <tr><td>Train</td><td>383</td></tr>
+          <tr><td>Validation</td><td>97</td></tr>
+          <tr><td>Test</td><td>68</td></tr>
+        </table>
+        <p>Sources: 55 controlled Kubernetes, 406 synthetic unit tests, 87 documentation-derived. Quality checks passed: grounding, no leakage, no secrets, no duplicates.</p>
+      </div>
+    </section>
+
     <section id="tools">
-      <div class="eyebrow">TOOL SURFACE</div>
+      <div class="eyebrow">7</div>
       <h2>9 diagnostic tools</h2>
       <div class="panel">
         <table>
@@ -139,62 +178,203 @@ td{color:#aaa3a0}
           <tr><td>get_workload_status</td><td>namespace, pod</td></tr>
           <tr><td>get_configuration_status</td><td>namespace, pod</td></tr>
         </table>
+        <p>Failures don't stop at one resource: pod problem may trace to node, workload, service, storage, or configuration.</p>
       </div>
     </section>
 
-    <section id="accuracy">
-      <div class="eyebrow">EVIDENCE RULES</div>
-      <h2>Accuracy & Safety</h2>
+    <section id="provider">
+      <div class="eyebrow">8</div>
+      <h2>Provider abstraction</h2>
+      <div class="panel">
+        <p>Major architectural decision: no direct Kubernetes API calls scattered in Go code.</p>
+        <pre class="code-block">Diagnostic Tool → InfrastructureProvider → Kubernetes
+
+InfrastructureProvider
+  ├── LocalKubernetesProvider   (real cluster, KUBECONFIG-aware)
+  ├── FakeProvider              (tests / offline demo)
+  └── Stack8sProvider           (future)</pre>
+        <p>Today: Local provider tests against real Kubernetes. Tomorrow: Stack8s provider connects to Stack8s infra APIs — the AI doesn't change.</p>
+        <p><b>Go's role:</b> Needle = reasoning; Go = execution (validate tool name + arguments → dispatcher → provider → Kubernetes API). Provider stays read-only.</p>
+      </div>
+    </section>
+
+    <section id="arch">
+      <div class="eyebrow">9</div>
+      <h2>Complete architecture</h2>
+      <div class="panel">
+        <pre class="code-block">                USER
+                  │
+                  ▼
+              KORDIN UI
+                  │
+                  ▼
+           Diagnostic API
+                  │
+                  ▼
+           Diagnostic Job
+                  │
+                  ▼
+               Needle 3
+          ┌────────────────┐
+          │ understand     │
+          │ intent         │
+          │ select tool    │
+          └──────┬─────────┘
+                 ▼
+          Go Dispatcher
+                 ▼
+     InfrastructureProvider
+          ┌──────┴──────┐
+          ▼             ▼
+   Local Kubernetes   Fake Provider
+          │
+          ▼
+    Kubernetes API
+          │
+          ▼
+       Evidence
+          │
+          ▼
+        Needle 3
+      correlate
+          │
+          ▼
+   Root Cause Analysis
+          │
+          ▼
+     Final Diagnosis
+          │
+          ▼
+        KORDIN UI</pre>
+      </div>
+    </section>
+
+    <section id="loop">
+      <div class="eyebrow">10</div>
+      <h2>What the model actually receives + the loop</h2>
+      <div class="panel">
+        <p>The UI already knows the target. The runtime passes it explicitly — the model must never guess the pod from the question:</p>
+        <pre class="code-block">Target namespace: ai-diagnose-test
+Target pod: demo-image-failure
+User question: Why isn't this pod starting?</pre>
+        <p>Needle then:</p>
+        <pre class="code-block">get_pod_status → evidence: Pending, ErrImagePull
+→ get_pod_events → Failed to pull image / BackOff
+→ conclude: Kubernetes cannot pull the image.</pre>
+        <p>The loop is bounded: if root cause is proven it stops; if evidence is insufficient it says so — it never guesses.</p>
+        <h3>Container discovery (important bug fix)</h3>
+        <p>Pod <code>multi-container-test</code> contains <code>app</code> + <code>failing-sidecar</code>. Only the sidecar fails. Pod name ≠ container name — the loop discovers real container names from <code>get_pod_status</code> before calling <code>get_container_logs</code>.</p>
+      </div>
+    </section>
+
+    <section id="scenarios">
+      <div class="eyebrow">11</div>
+      <h2>Live scenario validation (real Stack8s cluster)</h2>
+      <div class="panel">
+        <p>Cluster workers: <code>s8s-worker-25203d88</code>, <code>s8s-worker-81e1bfe6</code>, <code>s8s-worker-eaf87a3e</code>. Test namespace: <code>ai-diagnose-test</code>.</p>
+        <table>
+          <tr><th>Scenario</th><th>Result</th></tr>
+          <tr><td>ImagePullBackOff</td><td>PASS</td></tr>
+          <tr><td>CrashLoopBackOff / exit 1</td><td>PASS</td></tr>
+          <tr><td>Pending / insufficient CPU</td><td>PASS</td></tr>
+          <tr><td>Pending / node selector</td><td>PASS</td></tr>
+          <tr><td>Service status</td><td>PASS</td></tr>
+          <tr><td>Storage/PVC status</td><td>PASS</td></tr>
+          <tr><td>Workload/controller</td><td>PASS</td></tr>
+          <tr><td>Configuration / identity</td><td>PASS</td></tr>
+          <tr><td>Node health</td><td>PASS</td></tr>
+          <tr><td>GPU</td><td>PASS</td></tr>
+          <tr><td>OOMKilled</td><td>PASS</td></tr>
+          <tr><td>Missing ConfigMap</td><td>PASS</td></tr>
+          <tr><td>Liveness probe failure</td><td>PASS</td></tr>
+          <tr><td>Init container + main</td><td>PASS</td></tr>
+          <tr><td>Multi-container</td><td>PASS</td></tr>
+          <tr><td>Resource not found</td><td>PASS</td></tr>
+        </table>
+        <p>Plus ground-truth-first methodology: before asking the AI, we collected the kubectl ground truth and compared the AI output against it — never the other way around.</p>
+      </div>
+    </section>
+
+    <section id="errors">
+      <div class="eyebrow">12</div>
+      <h2>Error handling</h2>
       <div class="panel">
         <ul>
-          <li>Diagnosis is grounded only in collected evidence — no fabricated error strings, exit codes, or events.</li>
-          <li>Absence of evidence ≠ evidence of absence: <kbd>RESOURCE_NOT_FOUND</kbd> stops the investigation; Kubernetes API errors yield "unable to collect evidence", never a confident diagnosis.</li>
-          <li>Symptoms vs causes: CrashLoopBackOff is investigated (termination reason/exit code/OOM/probe), not assumed to mean "application crashed". Pending never assumed to mean unscheduled. Liveness/startup vs readiness probes distinguished. <code>Completed</code> never reported as failure.</li>
-          <li>Empty results are honest: empty service list → "no services found", not a CrashLoop diagnosis.</li>
-          <li>Kiosk-safe: provider errors propagate as bounded error fields; bounded tool calls; no resource mutation.</li>
+          <li><b>RESOURCE_NOT_FOUND</b> — the requested resource does not exist/is not visible. Loop stops, diagnosis states it was not found, no invented root cause.</li>
+          <li><b>COLLECTION_FAILED</b> — Kubernetes evidence unavailable. Output: "Cannot determine diagnosis because Kubernetes evidence is unavailable." Never "Workload failure detected."</li>
         </ul>
+        <p><b>Evidence integrity:</b> final diagnosis may only claim what tools returned. If evidence contains exit code 1, BackOff, and "Application crashed", the allowed claim is "application is repeatedly crashing" — not "database connection failed" unless database evidence exists.</p>
+      </div>
+    </section>
+
+    <section id="training">
+      <div class="eyebrow">13</div>
+      <h2>Training story (important honesty)</h2>
+      <div class="panel">
+        <p>Early version F19 baseline metrics: exact tool-call 63.5%, tool selection 76.2%, argument 87.7%. After tuning: <b>74.6% / 88.9% / 93.8%</b>.</p>
+        <p>Then Dataset V3 was trained (383/97/68, 3450 steps, loss ≈ 0.0001, validation ≈ 0.0174) — but the real benchmark <b>regressed badly</b>: exact tool-call 8.82%, tool selection 33.8%, arguments 28.7%, errors mostly MISSING_TOOL.</p>
+        <h3>Engineering lesson</h3>
+        <p>Training loss ≠ production readiness. We benchmarked actual behavior and <b>kept the validated Needle 3 F19 checkpoint</b> for the runtime, not the regressed V3 model.</p>
+        <p>Runtime loads the model once (<code>stateless=True</code> per request so no state leaks between pods/namespaces), with a fixed 1280-token JAX JIT buffer for fast CPU inference.</p>
       </div>
     </section>
 
     <section id="usage">
-      <div class="eyebrow">OPERATE</div>
+      <div class="eyebrow">14</div>
       <h2>How to use</h2>
       <div class="panel">
-        <pre class="code-block">export KUBECONFIG=/path/to/kubeconfig   # Stack8s kubeconfig
+        <pre class="code-block">export KUBECONFIG=/path/to/stack8s-kubeconfig.yaml
 export STACK8S_PROVIDER=local-kubernetes
-python3 -m http.server 8080 --directory web   # or run runtime/server.py 8080
+venv/bin/python3 runtime/server.py 8080
 
-# CLI
 go run ./cmd/diagnose --namespace &lt;ns&gt; --pod &lt;pod&gt; --question "&lt;question&gt;"
-
-# UI
-open http://localhost:8080</pre>
+# UI → http://localhost:8080</pre>
       </div>
     </section>
 
-    <section id="tests">
-      <div class="eyebrow">QA</div>
-      <h2>Testing</h2>
+    <section id="qa">
+      <div class="eyebrow">15</div>
+      <h2>Testing & lessons</h2>
       <div class="panel">
         <pre class="code-block">go test -v ./...
 go vet ./...
-python3 -m unittest runtime.test_diagnostic_loop -v   # 41 tests</pre>
-        <p>Coverage includes: target propagation, KUBECONFIG honoring, CrashLoop, ImagePullBackOff, OOMKilled, Pending/unscheduled vs scheduled/config-error, init containers, probes, multi-container, missing resource, service/storage/GPU/config/workload/node domains, container discovery.</p>
+venv/bin/python3 -m unittest runtime.test_diagnostic_loop -v   # 41 tests</pre>
+        <h3>Lessons</h3>
+        <ul>
+          <li>Don't trust model output as ground truth — <code>kubectl describe</code> first, compare AI against ground truth.</li>
+          <li>Training metrics are not enough — benchmark actual tool-use behavior.</li>
+          <li>Never hardcode scenarios — discover namespaces/pods/containers/nodes dynamically.</li>
+          <li>Never let AI invent Kubernetes facts — Kubernetes is source of truth, Needle is reasoning.</li>
+        </ul>
       </div>
     </section>
 
     <section id="limits">
-      <div class="eyebrow">KNOWN LIMITS</div>
-      <h2>Limitations</h2>
+      <div class="eyebrow">16</div>
+      <h2>What this is NOT + limits</h2>
       <div class="panel">
+        <p>Not a magic Kubernetes chatbot, not a replacement for kubectl, and not a hardcoded Q&amp;A. It is an evidence-driven investigation system: Needle 3 decides what to investigate, Go executes, Kubernetes supplies facts, diagnosis is produced from those facts.</p>
+        <p>No automatic remediation yet — diagnosis and repair are separate for safety. Roadmap: Phase 1 diagnosis → Phase 2 incident correlation → Phase 3 suggested remediation → Phase 4 controlled remediation → Phase 5 autonomous SRE.</p>
         <ul>
-          <li>Readiness endpoint-removal reasoning is event-based; EndpointSlice not exposed by the 9 tools.</li>
-          <li>RBAC errors surface as provider errors; no dedicated RBAC tool.</li>
           <li>GPU data is capacity/allocation, not live DCGM utilization.</li>
-          <li>Diagnostic mode is read-only — remediation is a separate step.</li>
+          <li>Endpoint readiness via events; no EndpointSlice tool yet.</li>
+          <li>RBAC surface currently returns provider errors only.</li>
         </ul>
       </div>
     </section>
+
+    <section id="pm-qa">
+      <div class="eyebrow">17</div>
+      <h2>PM Q&amp;A cheat sheet</h2>
+      <div class="panel">
+        <p><b>"What did you build?"</b> — An evidence-driven AI diagnostic system for Kubernetes. The user describes the problem; Needle 3 picks tools; Go runs them against the real cluster; Needle correlates the returned facts into a grounded diagnosis. AI never invents facts — Kubernetes is the source of truth.</p>
+        <p><b>"What was the model trained on?"</b> — Needle 3 was LoRA fine-tuned on tool-use examples: question → tool call → evidence → next tool → grounded diagnosis. Dataset V3 has 548 audited examples (383 train / 97 val / 68 test) from controlled failures, synthetic tests, and docs. Training focused on tool selection, correct arguments, and multi-step diagnostic flows.</p>
+        <p><b>"When does the model see real data?"</b> — At runtime. User question + explicit target + live evidence from the Go provider; final diagnosis is built only from that live evidence.</p>
+        <p><b>"Why need AI at all?"</b> — Deterministic rules reliably catch explicit signals. AI's value is ambiguous/multi-resource correlation: CrashLoopBackOff alone is not a root cause — AI investigates state, events, logs, probes, config, and workload dynamically to find the real cause.</p>
+        <p><b>"Is it like AWS Agent SRE?"</b> — Conceptually related, but Stack8s-native and cloud-agnostic. Stack8s already manages multi-cloud Kubernetes, so AI Diagnose plugs the diagnosis capability directly into that existing workflow.</p>
+      </div>
+    </section>
+
   </main>
 </div>
 </body>
