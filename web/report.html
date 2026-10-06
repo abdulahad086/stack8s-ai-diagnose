@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Diagnose — Project Report</title>
+<link rel="stylesheet" href="style.css">
+<style>
+.report h1{font-size:clamp(34px,4vw,56px)}
+.report h3{font-size:18px;color:var(--shell);margin-bottom:8px}
+.report .panel{padding:28px}
+.report p,.report li{color:#aaa3a0;line-height:1.6}
+.report ul,.report ol{margin-left:18px;display:flex;flex-direction:column;gap:6px}
+.kbd{border:1px solid var(--line);border-radius:6px;padding:2px 6px;background:var(--panel2);font:11px "Geist Mono",monospace}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}
+th{background:var(--panel2);color:var(--shell)}
+td{color:#aaa3a0}
+.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 10px;font:10px "Geist Mono",monospace;color:var(--green)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="side-logo">AI DIAGNOSE</div>
+    <div class="nav-head">REPORT</div>
+    <nav class="nav">
+      <a href="#overview">Overview</a>
+      <a href="#arch">Architecture</a>
+      <a href="#flow">How it works</a>
+      <a href="#vsdet">vs Deterministic</a>
+      <a href="#tools">Tools</a>
+      <a href="#accuracy">Accuracy & Safety</a>
+      <a href="#usage">How to use</a>
+      <a href="#tests">Testing</a>
+      <a href="#limits">Limitations</a>
+    </nav>
+    <div class="version">AI DIAGNOSE<br>BUILD V16</div>
+  </aside>
+
+  <main class="report">
+    <section id="overview">
+      <div class="eyebrow">PROJECT REPORT</div>
+      <h1>AI Diagnose for stack8s</h1>
+      <p>AI Diagnose is an AI-driven Kubernetes diagnostic system for Stack8s clusters. It turns a natural-language question about a namespace/pod into a grounded, evidence-backed diagnosis — collecting real cluster state via a provider boundary, attributing root causes correctly, and never inventing facts.</p>
+      <p><span class="pill">Go · Python · Needle 3 F19 · client-go · KORDIN-style UI</span></p>
+    </section>
+
+    <section id="arch">
+      <div class="eyebrow">ARCHITECTURE</div>
+      <h2>System</h2>
+      <div class="panel">
+        <ul>
+          <li><b>Web UI / API</b> (<span class="kbd">runtime/server.py</span>) — serves the UI, <span class="kbd">POST /api/diagnose</span>, polls <span class="kbd">/api/diagnose/status</span>.</li>
+          <li><b>Diagnostic loop</b> (<span class="kbd">runtime/diagnostic_loop.py</span>) — intent analysis → deterministic tool plan → bridge → grounded synthesis.</li>
+          <li><b>Tool executor</b> (<span class="kbd">cmd/tool_exec</span>) — JSON in/out per tool call, JSON out, prints provider target.</li>
+          <li><b>Dispatcher</b> (<span class="kbd">provider/dispatcher.go</span>) — validates ToolCall, routes to provider methods (9 tools).</li>
+          <li><b>InfrastructureProvider</b> — boundary interface (22 methods); implementations: LocalKubernetes (client-go, only K8s imports), Fake (tests), Stack8s (future).</li>
+          <li><b>Needle 3 F19</b> — fine-tuned small LLM (<span class="kbd">checkpoints/needle3.safetensors</span>) used for tool-schema synthesis; runtime treats it as advisory while evidence rules decide.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="flow">
+      <div class="eyebrow">RUNTIME FLOW</div>
+      <h2>How a diagnosis happens</h2>
+      <div class="panel">
+        <ol>
+          <li>User supplies namespace + pod + question (+ provider) — target is propagated explicitly, never inferred from the question.</li>
+          <li>Phase 1: intent-aware deterministic plan selects relevant tools (pod status/events/logs only for crash questions; GPU/storage/service/config/workload/node for those domains).</li>
+          <li>Phase 2: tools execute via <span class="kbd">cmd/tool_exec</span>; container names and node names are discovered from evidence, never hardcoded. Pending/unscheduled pods skip log collection. <span class="kbd">RESOURCE_NOT_FOUND</span> short-circuits the investigation.</li>
+          <li>Bridge verifies the real cluster target (<span class="kbd">KUBECONFIG</span>, e.g. the Stack8s endpoint) before Needle synthesis.</li>
+          <li>Phase 3: causal synthesis ranks domain evidence first, then Pending→scheduled/unscheduled lattice, init containers, probes (liveness/readiness/startup distinctions), then crash/image/oom classification — citing evidence and recommending only from the proven cause.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="vsdet">
+      <div class="eyebrow">COMPARISON</div>
+      <h2>AI runtime vs deterministic script</h2>
+      <div class="panel">
+        <table>
+          <tr><th>Capability</th><th>Deterministic K8s script</th><th>AI Diagnose</th></tr>
+          <tr><td>Input</td><td>Requires explicit commands per scenario</td><td>Free-form question, target carried from context</td></tr>
+          <tr><td>Tool chain</td><td>Hardcoded per scenario</td><td>Intent-aware, evidence-adaptive chaining</td></tr>
+          <tr><td>Root cause</td><td>Template output</td><td>Causal ranking across status/events/logs/termination reasons</td></tr>
+          <tr><td>Missing resources</td><td>Exit code / empty list</td><td>Explicit "resource not found", no fabricated failure</td></tr>
+          <tr><td>Safety</td><td>—</td><td>Read-only; no secrets; uncertainty reported instead of guessing</td></tr>
+          <tr><td>Multi-container</td><td>Manual loop</td><td>Per-container attribution (app vs sidecar vs init)</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="tools">
+      <div class="eyebrow">TOOL SURFACE</div>
+      <h2>9 diagnostic tools</h2>
+      <div class="panel">
+        <table>
+          <tr><th>Tool</th><th>Arguments</th></tr>
+          <tr><td>get_pod_status</td><td>namespace, pod</td></tr>
+          <tr><td>get_pod_events</td><td>namespace, pod</td></tr>
+          <tr><td>get_container_logs</td><td>namespace, pod, container</td></tr>
+          <tr><td>get_node_status</td><td>node_name</td></tr>
+          <tr><td>get_gpu_status</td><td>node_name</td></tr>
+          <tr><td>get_service_status</td><td>namespace</td></tr>
+          <tr><td>get_storage_status</td><td>namespace, pod</td></tr>
+          <tr><td>get_workload_status</td><td>namespace, pod</td></tr>
+          <tr><td>get_configuration_status</td><td>namespace, pod</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="accuracy">
+      <div class="eyebrow">EVIDENCE RULES</div>
+      <h2>Accuracy & Safety</h2>
+      <div class="panel">
+        <ul>
+          <li>Diagnosis is grounded only in collected evidence — no fabricated error strings, exit codes, or events.</li>
+          <li>Absence of evidence ≠ evidence of absence: <kbd>RESOURCE_NOT_FOUND</kbd> stops the investigation; Kubernetes API errors yield "unable to collect evidence", never a confident diagnosis.</li>
+          <li>Symptoms vs causes: CrashLoopBackOff is investigated (termination reason/exit code/OOM/probe), not assumed to mean "application crashed". Pending never assumed to mean unscheduled. Liveness/startup vs readiness probes distinguished. <code>Completed</code> never reported as failure.</li>
+          <li>Empty results are honest: empty service list → "no services found", not a CrashLoop diagnosis.</li>
+          <li>Kiosk-safe: provider errors propagate as bounded error fields; bounded tool calls; no resource mutation.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="usage">
+      <div class="eyebrow">OPERATE</div>
+      <h2>How to use</h2>
+      <div class="panel">
+        <pre class="code-block">export KUBECONFIG=/path/to/kubeconfig   # Stack8s kubeconfig
+export STACK8S_PROVIDER=local-kubernetes
+python3 -m http.server 8080 --directory web   # or run runtime/server.py 8080
+
+# CLI
+go run ./cmd/diagnose --namespace &lt;ns&gt; --pod &lt;pod&gt; --question "&lt;question&gt;"
+
+# UI
+open http://localhost:8080</pre>
+      </div>
+    </section>
+
+    <section id="tests">
+      <div class="eyebrow">QA</div>
+      <h2>Testing</h2>
+      <div class="panel">
+        <pre class="code-block">go test -v ./...
+go vet ./...
+python3 -m unittest runtime.test_diagnostic_loop -v   # 41 tests</pre>
+        <p>Coverage includes: target propagation, KUBECONFIG honoring, CrashLoop, ImagePullBackOff, OOMKilled, Pending/unscheduled vs scheduled/config-error, init containers, probes, multi-container, missing resource, service/storage/GPU/config/workload/node domains, container discovery.</p>
+      </div>
+    </section>
+
+    <section id="limits">
+      <div class="eyebrow">KNOWN LIMITS</div>
+      <h2>Limitations</h2>
+      <div class="panel">
+        <ul>
+          <li>Readiness endpoint-removal reasoning is event-based; EndpointSlice not exposed by the 9 tools.</li>
+          <li>RBAC errors surface as provider errors; no dedicated RBAC tool.</li>
+          <li>GPU data is capacity/allocation, not live DCGM utilization.</li>
+          <li>Diagnostic mode is read-only — remediation is a separate step.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>
