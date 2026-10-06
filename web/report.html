@@ -26,6 +26,8 @@ td{color:#aaa3a0}
     <div class="nav-head">REPORT</div>
     <nav class="nav">
       <a href="#overview">Overview</a>
+      <a href="#model">Model</a>
+      <a href="#why">Why this design</a>
       <a href="#arch">Architecture</a>
       <a href="#flow">How it works</a>
       <a href="#vsdet">vs Deterministic</a>
@@ -44,6 +46,36 @@ td{color:#aaa3a0}
       <h1>AI Diagnose for stack8s</h1>
       <p>AI Diagnose is an AI-driven Kubernetes diagnostic system for Stack8s clusters. It turns a natural-language question about a namespace/pod into a grounded, evidence-backed diagnosis — collecting real cluster state via a provider boundary, attributing root causes correctly, and never inventing facts.</p>
       <p><span class="pill">Go · Python · Needle 3 F19 · client-go · KORDIN-style UI</span></p>
+    </section>
+
+    <section id="model">
+      <div class="eyebrow">MODEL</div>
+      <h2>What model we use & how it was built</h2>
+      <div class="panel">
+        <h3>Needle 3 — F19</h3>
+        <p>Needle 3 is a small JAX-based language model. The F19 checkpoint (<span class="kbd">checkpoints/needle3.safetensors</span>, ~231 MB) is the validated production model used at runtime; it was fine-tuned, not trained from scratch.</p>
+        <h3>Training data</h3>
+        <p>Built from real cluster incidents collected with the deterministic pipeline (F1–F15): pod status, events, logs, node/GPU/service/storage/workload/config evidence. Each record follows the official Needle JSONL schema (question → tool calls → evidence → grounded diagnosis), with secrets redacted, no leakage between train/validation/test pod contexts, and split 63% / 18.5% / 18.5%.</p>
+        <h3>Fine-tuning</h3>
+        <p>LoRA adapters trained on Kaggle T4 via <span class="kbd">feature19_needle3_kaggle.ipynb</span> (10 epochs on <span class="kbd">dataset/train.jsonl</span>), then exported to the single safetensors checkpoint used at runtime. Evaluation used the holdout test split and the <span class="kbd">benchmark.py</span> tooling.</p>
+        <h3>What the model sees at runtime</h3>
+        <p>A compact prompt: the user question, the explicit target (namespace/pod), the tool JSON schema, and a bounded summary (~2000 chars) of the real provider evidence collected in Phase 2. It does not see kubeconfig, credentials, or secrets. Runtime buffer is fixed at 1280 tokens for fast CPU inference; JAX JIT is warmed up once at server start (~30–60s).</p>
+      </div>
+    </section>
+
+    <section id="why">
+      <div class="eyebrow">DESIGN RATIONALE</div>
+      <h2>Why this architecture was chosen</h2>
+      <div class="panel">
+        <ul>
+          <li><b>Small LLM + deterministic orchestration.</b> Needle 3 is good at language, not at cluster truth. So all truth comes from the InfrastructureProvider; the model only rephrases/frames evidence. This is what makes the system hallucination-resistant.</li>
+          <li><b>Intent-aware deterministic planning.</b> Tool choice is computed from question intent (not left to the model), so the right tools run every time — GPU questions get GPU tools, not CrashLoop noise.</li>
+          <li><b>Causal evidence hierarchy.</b> Specific causal evidence (termination reason, exit code, FailedScheduling, CreateContainerConfigError, probe events) outranks generic pod phase, so Pending/CrashLoopBackOff are never assumed to equal their common causes.</li>
+          <li><b>Provider boundary.</b> One interface isolates client-go from reasoning, enabling Fake provider tests and a future Stack8s provider with zero reasoning changes.</li>
+          <li><b>Fail closed.</b> Missing resources, provider errors, and empty results produce honest answers, never invented diagnoses.</li>
+          <li><b>Compare to a deterministic script.</b> Scripts encode one answer per scenario; this system handles arbitrary namespaces/pods/questions because the reasoning layer is generic and the model only sees real, current evidence.</li>
+        </ul>
+      </div>
     </section>
 
     <section id="arch">
