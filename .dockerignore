@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+brag-output/
+.git/
+k8s-check
+models/
