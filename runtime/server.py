@@ -196,8 +196,20 @@ def run_server(port: int = 8080):
     global GLOBAL_DIAGNOSER
 
     if not os.path.exists(CHECKPOINT_PATH):
-        print(f"ERROR: Needle 3 F19 checkpoint not found at {CHECKPOINT_PATH}", file=sys.stderr)
-        sys.exit(1)
+        env_url = os.environ.get("CHECKPOINT_URL", "").strip()
+        if env_url:
+            import urllib.request
+            os.makedirs(os.path.dirname(CHECKPOINT_PATH), exist_ok=True)
+            print(f"Downloading Needle checkpoint from CHECKPOINT_URL...", flush=True)
+            try:
+                urllib.request.urlretrieve(env_url, CHECKPOINT_PATH)
+                print(f"Checkpoint downloaded to {CHECKPOINT_PATH}", flush=True)
+            except Exception as e:
+                print(f"ERROR: could not download checkpoint: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print(f"ERROR: Needle 3 F19 checkpoint not found at {CHECKPOINT_PATH}", file=sys.stderr)
+            sys.exit(1)
 
     abs_path = os.path.abspath(CHECKPOINT_PATH)
     file_size = os.path.getsize(abs_path)

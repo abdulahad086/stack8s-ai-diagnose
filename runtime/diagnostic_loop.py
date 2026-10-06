@@ -157,7 +157,14 @@ class NeedleDiagnoser:
         from needle.model.run import load_checkpoint, get_tokenizer, SimpleAttentionNetwork
 
         if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Needle 3 F19 checkpoint not found at: {checkpoint_path}")
+            env_url = os.environ.get("CHECKPOINT_URL", "").strip()
+            if env_url:
+                import urllib.request
+                os.makedirs(os.path.dirname(checkpoint_path) or ".", exist_ok=True)
+                print(f"Downloading checkpoint from CHECKPOINT_URL...", flush=True)
+                urllib.request.urlretrieve(env_url, checkpoint_path)
+            else:
+                raise FileNotFoundError(f"Needle 3 F19 checkpoint not found at: {checkpoint_path}")
 
         self.abs_path = os.path.abspath(checkpoint_path)
         self.file_size = os.path.getsize(self.abs_path)
