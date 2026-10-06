@@ -70,6 +70,7 @@ async function runDiagnosis() {
       pod: pod,
       question: question || `Why is pod ${pod} failing in namespace ${namespace}?`,
       provider: provider,
+      kubeconfig: document.getElementById("input-kubeconfig").value.trim() || undefined,
     };
 
     updateFlowStep("flow-step-needle1", "active");

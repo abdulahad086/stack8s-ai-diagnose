@@ -63,13 +63,27 @@ def validate_tool_call(call: dict) -> tuple[bool, str]:
 class ToolDispatcherBridge:
     """Executes provider tools via Go Provider ToolDispatcher."""
 
-    def __init__(self, provider_type: str = "local-kubernetes", project_dir: str = None):
+    def __init__(self, provider_type: str = "local-kubernetes", project_dir: str = None, kubeconfig_content: str = None):
         self.provider_type = provider_type
         self.project_dir = project_dir or os.getcwd()
+        self.kubeconfig_content = kubeconfig_content
+
+    def _write_kubeconfig(self):
+        import tempfile
+        if not self.kubeconfig_content:
+            return None
+        fd, path = tempfile.mkstemp(prefix="kubeconfig-", suffix=".yaml")
+        with os.fdopen(fd, "w") as f:
+            f.write(self.kubeconfig_content)
+        return path
 
     def execute_tool(self, tool_name: str, arguments: dict) -> dict:
         env = os.environ.copy()
         env["STACK8S_PROVIDER"] = self.provider_type
+        kube_path = self._write_kubeconfig()
+        if kube_path:
+            env["STACK8S_KUBECONFIG_PATH"] = kube_path
+            env["KUBECONFIG"] = kube_path
         cmd = [
             "go", "run", "./cmd/tool_exec",
             "--tool", tool_name,
@@ -93,8 +107,12 @@ class ToolDispatcherBridge:
             # Surface dispatcher diagnostics (provider target) without leaking secrets.
             if res.stderr.strip():
                 print(f"  [dispatcher] {res.stderr.strip().splitlines()[-1]}", flush=True)
+            if kube_path and os.path.exists(kube_path):
+                os.unlink(kube_path)
             return json.loads(res.stdout.strip())
         except Exception as e:
+            if kube_path and os.path.exists(kube_path):
+                os.unlink(kube_path)
             return {
                 "tool": tool_name,
                 "arguments": arguments,
@@ -105,6 +123,10 @@ class ToolDispatcherBridge:
         """Return the provider's configured name and cluster host (no credentials)."""
         env = os.environ.copy()
         env["STACK8S_PROVIDER"] = self.provider_type
+        kube_path = self._write_kubeconfig()
+        if kube_path:
+            env["STACK8S_KUBECONFIG_PATH"] = kube_path
+            env["KUBECONFIG"] = kube_path
         cmd = ["go", "run", "./cmd/tool_exec", "--print-target"]
         res = None
         try:
@@ -115,6 +137,9 @@ class ToolDispatcherBridge:
             return json.loads(res.stdout.strip())
         except Exception as e:
             return {"error": f"Unable to determine provider target: {e}", "stderr": (res.stderr if res else "")}
+        finally:
+            if kube_path and os.path.exists(kube_path):
+                os.unlink(kube_path)
 
 
 def _is_resource_not_found(evidence: dict) -> bool:

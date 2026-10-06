@@ -21,7 +21,13 @@ func getProvider(provType string) provider.InfrastructureProvider {
 
 	switch strings.ToLower(provType) {
 	case "local-kubernetes", "kubernetes", "k8s":
-		prov, err := provider.NewLocalKubernetesProvider()
+		var prov *provider.LocalKubernetesProvider
+		var err error
+		if p := os.Getenv("STACK8S_KUBECONFIG_PATH"); p != "" {
+			prov, err = provider.NewLocalKubernetesProviderFromPath(p)
+		} else {
+			prov, err = provider.NewLocalKubernetesProvider()
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: failed to initialize LocalKubernetesProvider: %v\n", err)
 			os.Exit(1)

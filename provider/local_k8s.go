@@ -67,6 +67,33 @@ func NewLocalKubernetesProvider() (*LocalKubernetesProvider, error) {
 	}, nil
 }
 
+// NewLocalKubernetesProviderFromPath initializes a provider from an explicit
+// kubeconfig file path, bypassing the default KUBECONFIG/~/.kube/config lookup.
+func NewLocalKubernetesProviderFromPath(kubeconfigPath string) (*LocalKubernetesProvider, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeUnavailable,
+			Message: fmt.Sprintf("failed to load kubeconfig from %s", kubeconfigPath),
+			Err:     err,
+		}
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, &ProviderError{
+			Code:    ErrCodeUnavailable,
+			Message: "failed to create Kubernetes client",
+			Err:     err,
+		}
+	}
+
+	return &LocalKubernetesProvider{
+		config:    config,
+		clientset: clientset,
+	}, nil
+}
+
 func (p *LocalKubernetesProvider) Name() string {
 	return "local-kubernetes"
 }

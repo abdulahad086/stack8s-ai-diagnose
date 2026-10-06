@@ -77,6 +77,9 @@ class DiagnosticHandler(SimpleHTTPRequestHandler):
         pod = str(req_data.get("pod", "")).strip()
         question = str(req_data.get("question", "")).strip()
         provider_type = str(req_data.get("provider", "local-kubernetes")).strip()
+        kubeconfig_content = req_data.get("kubeconfig")
+        if kubeconfig_content is not None:
+            kubeconfig_content = str(kubeconfig_content).strip() or None
 
         # Validation
         if not question:
@@ -97,7 +100,7 @@ class DiagnosticHandler(SimpleHTTPRequestHandler):
         print(f"\n[API] POST /api/diagnose | job_id={job_id} namespace={namespace} pod={pod} provider={provider_type}", flush=True)
         print(f"[API] Question: {question}", flush=True)
 
-        bridge = ToolDispatcherBridge(provider_type=provider_type, project_dir=PROJECT_ROOT)
+        bridge = ToolDispatcherBridge(provider_type=provider_type, project_dir=PROJECT_ROOT, kubeconfig_content=kubeconfig_content)
 
         job_entry = {
             "job_id": job_id,
